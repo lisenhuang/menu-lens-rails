@@ -35,5 +35,6 @@ cards.each do |card|
   end
 end
 abort "Missing Hotwire" unless get(base,"/explore?q=rice").include?('turbo-frame id="menu-results"') && get(base,"/application.js").include?("connectStreamSource")
+abort "Admin module unavailable" unless get(base,"/admin.js").include?("export async function openAdmin")
 abort "Admin authentication disabled" unless Net::HTTP.get_response(URI.join(base,"/api/admin/settings")).code=="401"
 puts "Verified all existing SQLite tables, #{cards.size} published menus and #{db.get_first_value('SELECT count(*) FROM dish_objects')} image references"

@@ -3,7 +3,7 @@ Rails.application.routes.draw do
   get "explore" => "menus#index"
   get "create" => "pages#create"
   get "privacy" => "pages#privacy"
-  get "admin" => "pages#admin"
+  get "admin" => "pages#admin", format: false
   get "healthz" => "pages#health"
   get "submissions" => "pages#retired"
   get "menu/osteria-verde" => "pages#retired"

@@ -230,6 +230,9 @@ test('private uploads and approved illustrations finish with no client connected
   const first=await verify('Test kitchen',restaurantPin);
   const api='/api/jobs/'+first.id;
   assert.equal((await request(api+'/upload',first.cookie,{pages:[photo]},'192.0.2.45','Whangārei')).status,202);
+  const adminScript=await request('/admin.js');
+  assert.match(adminScript.headers.get('content-type'),/javascript/);
+  assert.match(await adminScript.text(),/export async function openAdmin/);
   const retiredPage=await fetch(origin+'/submissions',{redirect:'manual'});
   assert.equal(retiredPage.status,301);
   assert.equal(retiredPage.headers.get('location'),'/explore');
