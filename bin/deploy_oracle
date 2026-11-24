@@ -4,7 +4,6 @@ set -euo pipefail
 umask 077
 base="$HOME/apps/menu-lens"
 release=$1
-repo_url=$2
 tag=$(basename "$release")
 image="menu-lens:$tag"
 vault="$base/private"
@@ -18,7 +17,7 @@ if [[ ! -s "$vault/rails.env" ]]; then
   unset ruby_secret
 fi
 chmod 600 "$vault/rails.env"
-env_args=(--env-file "$vault/runtime.env" --env-file "$vault/rails.env" -e PUBLIC_ORIGIN=https://menu.9l.nz -e TRUST_CLOUDFLARE=1 -e "SOURCE_REPOSITORY=$repo_url")
+env_args=(--env-file "$vault/runtime.env" --env-file "$vault/rails.env" -e PUBLIC_ORIGIN=https://menu.9l.nz -e TRUST_CLOUDFLARE=1)
 isolated=(--rm --read-only --tmpfs /tmp:rw,size=96m -e DATA_DIR=/tmp/metadata)
 chmod -R a+rX "$release/public"
 prefix=$(docker run "${isolated[@]}" "${env_args[@]}" -v "$release/public:/assets:ro" "$image" bundle exec ruby bin/publish_assets /assets | tail -1)
@@ -56,7 +55,7 @@ cleanup() {
 trap cleanup EXIT
 common=(--read-only --tmpfs /tmp:rw,size=96m --cap-drop ALL --security-opt no-new-privileges --memory 768m --log-opt max-size=10m --log-opt max-file=3)
 snapshot() {
-  docker run --rm --read-only --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,size=32m -v menu-lens-data:/source:ro -v "$backup:/backup" "$image" bundle exec ruby bin/snapshot /source/menu.sqlite "/backup/$1"
+  docker run --rm --read-only --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,size=32m -v menu-lens-data:/source:ro -v "$backup:/backup" "$image" bundle exec ruby bin/snapshot /source/menu.sqlite "/backup/$1" "${2:-online}"
 }
 snapshot rehearsal.sqlite
 cp "$backup/rehearsal.sqlite" "$stage/menu.sqlite"
@@ -75,11 +74,15 @@ docker exec "$stage_name" bundle exec ruby bin/verify_release /backup/rehearsal.
 active() {
   docker run --rm --read-only -v menu-lens-data:/source:ro "$image" bundle exec ruby -rsqlite3 -e 'db=SQLite3::Database.new("/source/menu.sqlite",readonly:true); puts db.get_first_value(%q{SELECT (SELECT count(*) FROM menus WHERE state IN ("queued","running"))+(SELECT count(*) FROM drafts WHERE state IN ("waiting","uploading","reading"))}.tr(34.chr,39.chr))'
 }
-while [[ $(active) != 0 ]]; do sleep 5; done
+while true; do
+  count=$(active)
+  [[ "$count" =~ ^[0-9]+$ ]] || exit 1
+  [[ "$count" != 0 ]] || break
+  sleep 5
+done
 old_stopped=1
 docker stop --time 30 menu-lens-web >/dev/null
-if [[ $(active) != 0 ]]; then echo "A new submission arrived during cutover. Restoring previous service." >&2; exit 1; fi
-snapshot cutover.sqlite
+snapshot cutover.sqlite stopped
 docker rename menu-lens-web "$old_name"
 old_renamed=1
 docker run -d --name menu-lens-web --network nine-l-nz --restart unless-stopped "${common[@]}" "${env_args[@]}" -v menu-lens-data:/data -p 127.0.0.1:8238:8080 "$image" >/dev/null

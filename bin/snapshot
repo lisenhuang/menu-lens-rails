@@ -1,14 +1,40 @@
 #!/usr/bin/env ruby
 require "sqlite3"
-require "json"
-require "digest"
-# SQLite's online backup includes committed WAL pages and does not alter the source.
-source,target=ARGV
+require "tmpdir"
+require "fileutils"
+
+source, target, mode = ARGV
 abort "Expected a new backup path" unless source && target && !File.exist?(target)
-db=SQLite3::Database.new(source,readonly:true)
-db.busy_timeout=10_000
-db.execute("VACUUM INTO ?",[target])
-File.chmod(0600,target)
-copy=SQLite3::Database.new(target,readonly:true)
-abort "Backup integrity check failed" unless copy.get_first_value("PRAGMA integrity_check")=="ok"
+
+def snapshot(source, target)
+  SQLite3::Database.new(source, readonly: true) do |db|
+    db.busy_timeout = 10_000
+    db.execute("VACUUM INTO ?", [target])
+  end
+end
+
+if mode == "stopped"
+  # The service has exited. SQLite may need to recreate its shared-memory file
+  # to read a WAL database. Let it do so on a private, writable copy.
+  Dir.mktmpdir(".cutover-", File.dirname(target)) do |dir|
+    local = File.join(dir, "menu.sqlite")
+    FileUtils.cp(source, local)
+    FileUtils.cp(source + "-wal", local + "-wal") if File.exist?(source + "-wal")
+    snapshot(local, target)
+  end
+else
+  snapshot(source, target)
+end
+
+File.chmod(0600, target)
+SQLite3::Database.new(target, readonly: true) do |copy|
+  abort "Backup integrity check failed" unless copy.get_first_value("PRAGMA integrity_check") == "ok"
+  if mode == "stopped"
+    pending = copy.get_first_value(<<~SQL)
+      SELECT (SELECT count(*) FROM menus WHERE state IN ('queued','running'))
+           + (SELECT count(*) FROM drafts WHERE state IN ('waiting','uploading','reading'))
+    SQL
+    abort "A submission arrived during cutover. Restoring previous service." unless pending.zero?
+  end
+end
 puts "SQLite backup verified"
