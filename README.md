@@ -97,7 +97,7 @@ The server replaces `{{dish_json}}` with the dish’s name and description seria
 <details>
 <summary><strong>Run, test and deploy</strong></summary>
 
-Use Ruby 3.4 or newer and Bundler. Node 24 or newer runs the HTTP compatibility tests. The homepage and public collection run without credentials.
+Use Ruby 4.0.10 and Bundler to match production. Node 24 or newer runs the HTTP compatibility tests. The homepage and public collection run without credentials.
 
 ```sh
 bundle install
