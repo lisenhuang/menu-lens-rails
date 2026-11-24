@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomBytes,randomInt,scryptSync} from 'node:crypto';
-import {fork} from 'node:child_process';
+import {spawn} from 'node:child_process';
 import {DatabaseSync} from 'node:sqlite';
 import {once} from 'node:events';
 import {createServer} from 'node:http';
@@ -120,7 +120,7 @@ test('private uploads and approved illustrations finish with no client connected
     await rm(dir,{recursive:true,force:true});
   });
   async function until(fn) {
-    for (let i=0;i<200;i++) {
+    for (let i=0;i<600;i++) {
       const result=await fn();
       if (result) return result;
       await delay(25);
@@ -128,14 +128,11 @@ test('private uploads and approved illustrations finish with no client connected
     assert.fail('Timed out waiting for the job');
   }
   async function start() {
-    // Only the test child redirects outbound provider requests. The application is unmodified.
-    const preload=`const original=globalThis.fetch; globalThis.fetch=(url, options)=>original(
-      new URL(new URL(url).pathname,'http://127.0.0.1:${providerPort}'),options);`;
-    child=fork(new URL('../server.mjs',import.meta.url),[],{
-      silent:true,execArgv:['--import','data:text/javascript,'+encodeURIComponent(preload)],
-      env:{...process.env,MENU_IMAGE_CONCURRENCY:'',MENU_READ_CONCURRENCY:'',R2_GATEWAY_URL:'http://localhost/__storage/',R2_GATEWAY_SECRET:'test-storage',OPENAI_IMAGE_MODEL:'',OPENAI_VISION_MODEL:'',HOST:'127.0.0.1',PORT:String(port),DATA_DIR:dir,PUBLIC_ORIGIN:origin,
+    child=spawn('bundle',['exec','puma','-C','config/puma.rb'],{stdio:['ignore','ignore','pipe'],
+      env:{...process.env,RAILS_ENV:"test",MOCK_PROVIDER_ORIGIN:"http://127.0.0.1:"+providerPort,MENU_IMAGE_CONCURRENCY:'',MENU_READ_CONCURRENCY:'',R2_GATEWAY_URL:'http://localhost/__storage/',R2_GATEWAY_SECRET:'test-storage',OPENAI_IMAGE_MODEL:'',OPENAI_VISION_MODEL:'',HOST:'127.0.0.1',PORT:String(port),DATA_DIR:dir,PUBLIC_ORIGIN:origin,
         OPENAI_API_KEY:'test',GOOGLE_PLACES_API_KEY:'test',TURNSTILE_SECRET:'test',TURNSTILE_SITE_KEY:'test',TURNSTILE_HOSTNAME:'localhost',TURNSTILE_TEST:'0',ADMIN_PIN_VERIFIER:verifier,TRUST_CLOUDFLARE:'1'},
     });
+    child.stderr.on('data',bytes=>process.stderr.write(bytes));
     await until(()=>fetch(origin+'/healthz').then(r=>r.ok).catch(()=>false));
   }
   function request(path,cookie='',body,ip='192.0.2.45',city) {
@@ -205,7 +202,7 @@ test('private uploads and approved illustrations finish with no client connected
   const ok=await login({pin,token:'admin-valid'});
   assert.equal(ok.status,200);
   const cookie=ok.headers.getSetCookie()[0];
-  assert.match(cookie,/HttpOnly; SameSite=Strict/);
+  assert.match(cookie,/HttpOnly; SameSite=Strict/i);
   const admin=cookie.split(';')[0];
   assert.equal((await login({pin,token:'admin-valid'})).status,403);
   const defaults=await (await request(settingsPath,admin)).json();
@@ -358,6 +355,28 @@ test('private uploads and approved illustrations finish with no client connected
   assert.match(html,/1 of 2 photos ready/);
   assert.match(html,/1 generating/);
   assert.ok(html.includes(liveMenu.cover) && html.includes('Bread') && html.includes('Soup'));
+  const results=await fetch(origin+'/explore?q=Bread',{headers:{'Turbo-Frame':'menu-results'}});
+  const frame=await results.text();
+  assert.match(frame,/<turbo-frame id="menu-results"/);
+  assert.ok(frame.includes(mixed.id) && !frame.includes('<html'));
+  const controller=new AbortController();
+  try {
+    const stream=await fetch(origin+mixedPath+'/events?view=turbo',{signal:AbortSignal.any([controller.signal,AbortSignal.timeout(5000)])});
+    assert.match(stream.headers.get('content-type'),/text\/event-stream/);
+    let fragment='';
+    const reader=stream.body.getReader();
+    const decoder=new TextDecoder();
+    while (!fragment.includes('\n\n')) {
+      const {value,done}=await reader.read();
+      if (done) break;
+      fragment+=decoder.decode(value,{stream:true});
+    }
+    assert.match(fragment,/<turbo-stream[^>]*target="visual-menu"/);
+    assert.match(fragment,/<article/);
+    assert.ok(fragment.includes(liveMenu.cover));
+  } finally {
+    controller.abort();
+  }
   images.close();
   const resumed=await events(mixedPath);
   await resumed.next(job=>job.state==='running' && job.completed===1);
@@ -513,6 +532,7 @@ test('private uploads and approved illustrations finish with no client connected
     assert.equal((await wrong.post('upload',{pages:[photo]})).status,202);
     const catalog=new DatabaseSync(join(dir,'menu.sqlite'));
     const saved=catalog.prepare("SELECT details FROM sessions JOIN drafts ON sessions.id=drafts.owner WHERE drafts.id=?").get(wrong.id);
+    await until(()=>catalog.prepare('SELECT state FROM drafts WHERE id=?').get(wrong.id)?.state==='review');
     const restaurant=JSON.parse(saved.details).restaurant;
     assert.equal(restaurant.address,options[0].address);
     assert.equal(restaurant.placeId,'');

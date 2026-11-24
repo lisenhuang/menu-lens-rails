@@ -1,0 +1,6 @@
+<article class="dish-card menu-card"><a class="menu-card-link" href="/menu/<%= menu[:id] %>" aria-label="View <%= menu[:restaurant]["name"] %> menu">
+  <div class="dish-image"><img src="<%= menu[:cover] %>" alt="" width="780" height="500" loading="lazy"></div>
+  <div class="dish-body"><div><h3><%= menu[:restaurant]["name"] %></h3><p><%= menu[:restaurant]["address"] %></p>
+  <p>Photographed <%= menu_date(menu[:date]) %> · <%= pluralize(menu[:count],"dish") %><% if menu[:state]!="complete" %> · <%= menu[:completed] %> photos ready<% end %></p>
+  <% if menu[:matchedDishes].present? %><p class="menu-matches"><strong>On the menu</strong> <%= menu[:matchedDishes].join(" · ") %></p><% end %></div></div>
+</a></article>

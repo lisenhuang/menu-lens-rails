@@ -1,0 +1,102 @@
+{
+  "imageModels": {
+    "gpt-image-2.6-flare": {
+      "low": 823,
+      "medium": 1449,
+      "high": 1756,
+      "xhigh": 3122,
+      "max": 7024
+    },
+    "gpt-image-2.6-sunburst": {
+      "low": 823,
+      "medium": 1449,
+      "high": 1756,
+      "xhigh": 3122,
+      "max": 7024
+    },
+    "gpt-image-2.5-flare": {
+      "low": 196,
+      "medium": 439,
+      "high": 1756,
+      "xhigh": 3122,
+      "max": 7024
+    },
+    "gpt-image-2.5-sunburst": {
+      "low": 196,
+      "medium": 439,
+      "high": 1756,
+      "xhigh": 3122,
+      "max": 7024
+    },
+    "gpt-image-2": {
+      "low": 196,
+      "medium": 1756,
+      "high": 7024
+    }
+  },
+  "readingModels": {
+    "gpt-5-mini": {
+      "efforts": [
+        "minimal",
+        "low",
+        "medium",
+        "high"
+      ],
+      "input": 0.25,
+      "cached": 0.025,
+      "output": 2
+    },
+    "gpt-5.4-mini": {
+      "efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "input": 0.75,
+      "cached": 0.075,
+      "output": 4.5
+    },
+    "gpt-6.1-terra": {
+      "efforts": [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "input": 1,
+      "cached": 0.05,
+      "output": 5,
+      "longContext": true
+    },
+    "gpt-6.2-sol": {
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "input": 2,
+      "cached": 0.1,
+      "output": 10,
+      "longContext": true
+    },
+    "gpt-6.2-astra": {
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "input": 8,
+      "cached": 0.4,
+      "output": 40,
+      "longContext": true
+    }
+  }
+}

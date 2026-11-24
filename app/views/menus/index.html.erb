@@ -1,0 +1,8 @@
+<div class="page">
+  <div class="page-heading"><p class="eyebrow page-kicker">THE PUBLIC COLLECTION</p><h1 class="page-title">Explore menus</h1><p class="page-intro">Find what you feel like eating in menus shared by diners.</p></div>
+  <%= form_with url: "/explore", method: :get, data: { controller: "search", turbo_frame: "menu-results", turbo_action:"replace" } do %>
+    <label class="field explore-search">Restaurant, area or dish<input id="explore-search" type="search" class="control" name="q" value="<%= @query %>" maxlength="180" placeholder="Try sushi, rice or a suburb" data-action="input->search#submit"></label>
+    <noscript><button class="btn quiet">Search</button></noscript>
+  <% end %>
+  <%= render "results" %>
+</div>

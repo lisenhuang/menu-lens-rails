@@ -14,6 +14,19 @@ After uploading, copy the menu link before closing the tab. Open it in the same 
 | :---: | :---: | :---: |
 | <img src="docs/screenshots/appearance.jpg" width="300" alt="Mobile theme picker with System selected and Light and Dark available"> | <img src="docs/screenshots/live-menu.jpg" width="300" alt="Mobile menu showing three of six photos ready and one generating"> | <img src="docs/screenshots/published-menu.jpg" width="300" alt="Published menu on a phone showing illustrated dishes and printed prices"> |
 
+## What I learned from *Master Hotwire*
+
+<a href="https://masterhotwire.com/"><img src="https://masterhotwire.com/images/hotwire-in-hands.png" width="140" alt="Artwork from the author’s Master Hotwire website"></a>
+
+I read Radan Skorić’s [*Master Hotwire*](https://masterhotwire.com/) while rebuilding Menu Lens in Rails. Here’s where I used the techniques from the book.
+
+| Technique | Where it appears in Menu Lens |
+| --- | --- |
+| Turbo Drive | Follow a restaurant link and Rails renders the next page while the browser keeps the current document. |
+| Turbo Frames | Type “rice” in Explore and only the search results change. |
+| Turbo Streams | When a dish photo is ready, Rails sends updated menu HTML to open browsers. |
+| Stimulus | Small controllers handle search input, the photo viewer, appearance, and the live menu connection. |
+
 ## Menu generation pipeline
 
 ```mermaid
@@ -61,7 +74,7 @@ On 21 November 2026, a diner uploaded two menu photos from MIBO in Auckland’s 
 
 ## AI prompts
 
-The transcription request has two text inputs. The image request uses a separate prompt for each dish. Both are defined in [providers.mjs](./providers.mjs).
+The transcription request has two text inputs. The image request uses a separate prompt for each dish. Both are defined in [the prompt configuration](./config/prompts.json) and [the Ruby provider](./app/services/providers.rb).
 
 ### 1. Menu transcription
 
@@ -84,16 +97,17 @@ The server replaces `{{dish_json}}` with the dish’s name and description seria
 <details>
 <summary><strong>Run, test and deploy</strong></summary>
 
-Use Node.js 24 or newer. The homepage and public collection run without credentials.
+Use Ruby 3.4 or newer and Bundler. Node 24 or newer runs the HTTP compatibility tests. The homepage and public collection run without credentials.
 
 ```sh
-node server.mjs   # http://127.0.0.1:8238
+bundle install
+bundle exec puma -C config/puma.rb   # http://127.0.0.1:8238
 node --test
 ```
 
 | Task | Configuration |
 | --- | --- |
-| Enable generation | Set `OPENAI_API_KEY`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` and `TURNSTILE_HOSTNAME` in `.env`. Run `node --env-file=.env server.mjs`. |
+| Enable generation | Set `OPENAI_API_KEY`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` and `TURNSTILE_HOSTNAME` in the private runtime environment before starting Puma. |
 | Connect storage | Deploy `storage/wrangler.jsonc` with its private R2 bucket. Set the same random secret as `STORAGE_SECRET` on the Worker and `R2_GATEWAY_SECRET` on the server. Set `R2_GATEWAY_URL` to the Worker route, including its trailing slash. |
 | Configure AI | In `/admin`, choose the menu-reading model and its thinking level, or change the dish image model and quality. Private history records each request and its estimated cost. The server reads `ADMIN_PIN_VERIFIER` from its private environment. |
 | Runtime defaults | `OPENAI_IMAGE_MODEL=gpt-image-2.6-sunburst` at high quality, `OPENAI_VISION_MODEL=gpt-6.1-terra` with medium reasoning. |

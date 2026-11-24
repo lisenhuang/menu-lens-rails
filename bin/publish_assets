@@ -1,0 +1,23 @@
+#!/usr/bin/env ruby
+require_relative "../config/environment"
+require "find"
+root=Pathname.new(ARGV.fetch(0)).realpath
+files={}
+root.find do |p|
+  next unless p.file?
+  name=p.relative_path_from(root).to_s
+  raise "Unexpected asset" unless name.match?(%r{\A(?:[a-z][\w.-]*|(?:fonts|images)/[\w.-]+)\z}) && AssetsController::TYPES.key?(p.extname.delete_prefix("."))
+  files[name]=p
+end
+%w[turbo stimulus].each do |name|
+  files["#{name}.min.js"]=Pathname.new(Gem.loaded_specs.fetch("#{name}-rails").full_gem_path).join("app/assets/javascripts/#{name}.min.js")
+end
+hashes=files.transform_values { |file| Digest::SHA256.file(file).hexdigest }
+prefix="site/"+Store.sha(hashes.sort.map { |name,digest| "#{name} #{digest}" }.join("\n"))
+files.each do |name,file|
+  key="#{prefix}/#{name}"
+  bytes=file.binread
+  Objects.request(key,method: :put,body:bytes,type:AssetsController::TYPES.fetch(file.extname.delete_prefix("."))) unless Objects.exists?(key)
+  raise "Asset integrity mismatch: #{name}" unless Store.sha(Objects.request(key))==hashes.fetch(name)
+end
+puts prefix

@@ -1,52 +1,8 @@
-import {icons} from './icons.js?v=3';
-import {dishMedia, escape, icon, listing, mapsLink, notice, pagesBack, pinText, progressText, renderMenu} from './menu-view.js?v=4';
-
-const main = document.querySelector('#main');
-const dialog = document.querySelector('#modal');
-const theme = document.querySelector('.theme');
+import {escape, icon, mapsLink, notice, pagesBack, pinText} from './ui.js';
 const $ = (selector,root=document)=>root.querySelector(selector);
-function enhance(root) {
-  for (const element of root.querySelectorAll('[data-icon]:empty')) {
-    const name = element.dataset.icon;
-    if (icons[name]) element.outerHTML = icon(name);
-  }
-}
-enhance(document);
 
-function syncTheme() {
-  const value = document.documentElement.dataset.theme || 'system';
-  const option = theme.querySelector(`[value="${value}"]`);
-  option.checked = true;
-  const trigger = theme.querySelector('summary');
-  trigger.innerHTML = icon({system:'sunMoon',light:'sun',dark:'moon'}[value]);
-  trigger.title = 'Change theme (currently '+option.getAttribute('aria-label')+')';
-  trigger.setAttribute('aria-label',trigger.title);
-}
-theme.addEventListener('change',event=>{
-  const value = event.target.value;
-  if (value === 'system') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = value;
-  try { localStorage.setItem('menu-lens-theme',value); } catch {}
-  syncTheme();
-});
-theme.addEventListener('click',event=>{
-  if (event.target.matches('input') && event.detail>0) {
-    theme.open = false;
-    theme.querySelector('summary').focus();
-  }
-});
-theme.addEventListener('focusout',event=>{
-  if (event.relatedTarget && !theme.contains(event.relatedTarget)) theme.open=false;
-});
-document.addEventListener('click',event=>{if (!theme.contains(event.target)) theme.open=false;});
-theme.addEventListener('keydown',event=>{
-  if (event.key === 'Escape') {
-    theme.open = false;
-    theme.querySelector('summary').focus();
-  }
-});
-syncTheme();
-
+export function mount(main,mode,id) {
+const dialog = document.querySelector('#modal');
 function localDate() {
   const now = new Date();
   const local = new Date(now.getTime()-now.getTimezoneOffset()*60000);
@@ -134,160 +90,6 @@ function showModal(title,glyph,body) {
 function page(title,kicker,intro,body,back='') {
   main.innerHTML = `<div class="page">${back}<div class="page-heading"><p class="eyebrow page-kicker">${kicker}</p>
     <h1 class="page-title">${title}</h1><p class="page-intro">${intro}</p></div>${body}</div>`;
-}
-
-const viewer=$('#image-viewer');
-const stage=$('.image-stage',viewer);
-const fullImage=$('img',stage);
-let imageOpener;
-let nativeFullscreen=false;
-main.addEventListener('click',event=>{
-  const link=event.target.closest('a[data-view-image]');
-  if (!link || event.button!==0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-  event.preventDefault();
-  imageOpener=link;
-  fullImage.alt=$('img',link).alt;
-  fullImage.src=link.href;
-  viewer.showModal();
-  // The dialog also fills the viewport on browsers without element fullscreen.
-  if (document.fullscreenEnabled && !document.fullscreenElement) stage.requestFullscreen().catch(()=>{});
-});
-$('button',stage).addEventListener('click',()=>viewer.close());
-stage.addEventListener('click',event=>{if (event.target===stage || event.target===fullImage) viewer.close();});
-document.addEventListener('fullscreenchange',()=>{
-  if (document.fullscreenElement===stage) nativeFullscreen=true;
-  else if (nativeFullscreen) {
-    nativeFullscreen=false;
-    if (viewer.open) viewer.close();
-  }
-});
-viewer.addEventListener('close',()=>{
-  if (document.fullscreenElement===stage) document.exitFullscreen().catch(()=>{});
-  fullImage.removeAttribute('src');
-  imageOpener?.focus({preventScroll:true});
-});
-
-async function explore() {
-  document.title = 'Explore menus · Menu Lens';
-  page('Explore menus','THE PUBLIC COLLECTION','Find what you feel like eating in menus shared by diners.',
-    `<label class="field explore-search">Restaurant, area or dish<input id="explore-search" type="search" class="control" maxlength="180" placeholder="Try sushi, rice or a suburb"></label>
-      <div id="menu-grid" class="dish-grid" aria-live="polite"><p class="muted">Loading menus…</p></div>`);
-  const grid=$('#menu-grid');
-  const search=$('#explore-search');
-  const url=new URL(location.href);
-  search.value=(url.searchParams.get('q') || '').slice(0,180);
-  let version=0,timer;
-  async function render(revision) {
-    const q=search.value.trim();
-    try {
-      const items=await api(q ? '/menus?q='+encodeURIComponent(q) : '/menus');
-      if (revision!==version) return;
-      if (items.length) grid.innerHTML=items.map(listing).join('');
-      else if (q) grid.innerHTML='<p class="muted">No menus match that search. Try another dish, restaurant or area.</p>';
-      else grid.innerHTML=`<div class="panel collection-empty"><h2>No menus published yet</h2>
-        <p class="muted">Add a menu from a restaurant you’ve visited.</p>
-        <a class="btn primary" href="/create">${icon('camera')} Upload a menu</a></div>`;
-    } catch {
-      if (revision===version) grid.innerHTML=notice('The public collection could not be loaded. Try again in a moment.');
-    } finally {
-      if (revision===version) grid.removeAttribute('aria-busy');
-    }
-  }
-  search.addEventListener('input',()=>{
-    if (search.value.trim()) url.searchParams.set('q',search.value.trim());
-    else url.searchParams.delete('q');
-    history.replaceState(null,'',url);
-    const revision=++version;
-    clearTimeout(timer);
-    grid.setAttribute('aria-busy','true');
-    timer=setTimeout(()=>render(revision),180);
-  });
-  await render(version);
-}
-
-function filterDishes() {
-  const onlyReady=$('#ready-filter')?.checked;
-  for (const section of main.querySelectorAll('.menu-section')) {
-    let visible=0;
-    for (const card of section.querySelectorAll('[data-position]')) {
-      card.hidden=Boolean(onlyReady && card.querySelector('.dish-pending'));
-      if (!card.hidden) visible++;
-    }
-    section.hidden=visible===0;
-    const link=main.querySelector(`.menu-jumps a[href="#${section.id}"]`);
-    if (link) link.hidden=section.hidden;
-  }
-}
-function bindMenu(id) {
-  const title=$('.menu-cover h1').textContent;
-  document.title=title+' · Menu Lens';
-  $('#share').onclick=()=>share();
-  const filter=$('#ready-filter');
-  if (filter) filter.onchange=filterDishes;
-  const originals=$('#original-menu');
-  originals?.addEventListener('toggle',()=>{
-    if (originals.hidden || !originals.open || originals.querySelector('img')) return;
-    $('.original-pages',originals).innerHTML=Array.from({length:Number(originals.dataset.count)},(_,i)=>{
-      const url=`/originals/${id}/${i}.jpg`;
-      return `<a href="${url}" data-view-image aria-haspopup="dialog"><img src="${url}" loading="lazy" alt="Original menu page ${i+1} from ${escape(title)}"><span>View page ${i+1} full screen</span></a>`;
-    }).join('');
-  });
-  const retry=$('#live-retry');
-  if (retry) retry.onclick=async()=>{
-    retry.disabled=true;
-    try {await api('/jobs/'+id+'/retry',{});}
-    catch(error) {errorAt($('#live-message'),error.message);}
-    finally {retry.disabled=false;}
-  };
-  if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView();
-}
-function updateMenuPhotos(job) {
-  const menu=$('#visual-menu');
-  if (!menu || !$('#live-meter')) return;
-  menu.dataset.state=job.state;
-  const ready=new Set(job.readyPositions),active=new Set(job.activePositions);
-  for (const placeholder of menu.querySelectorAll('.dish-pending')) {
-    const card=placeholder.closest('[data-position]'),i=Number(card.dataset.position);
-    if (ready.has(i)) {
-      placeholder.outerHTML=dishMedia({name:$('h3',card).textContent,image:`/media/${job.id}/${i}.webp`});
-    } else {
-      const stage=active.has(i)?'active':'waiting';
-      if (stage!==placeholder.dataset.stage) {
-        placeholder.dataset.stage=stage;
-        placeholder.lastElementChild.textContent=active.has(i)?'Illustrating':'Awaiting photo';
-      }
-    }
-  }
-  for (const [selector,text] of [['#live-title',progressText(job)],['#live-count',`${job.completed} of ${job.total} photos ready`],['#live-active',`${active.size} generating`]]) {
-    const el=$(selector);
-    if (el.textContent!==text) el.textContent=text;
-  }
-  $('#live-meter').value=job.completed;
-  $('#live-retry').hidden=!job.canRetry;
-  $('#live-message').hidden=true;
-  if (job.state==='complete') {
-    if ($('#original-menu')) $('#original-menu').hidden=false;
-    $('.ready-filter').hidden=true;
-    $('.live-separator').hidden=true;
-    $('#live-active').hidden=true;
-  }
-  filterDishes();
-}
-
-function privacy() {
-  document.title = 'Privacy · Menu Lens';
-  page('Privacy','MENU LENS','What happens to your menu photo and location.',
-    `<div class="panel privacy">
-      <h3>Public menus</h3><p>Generating a visual menu requires permission to publish it. The finished page includes the restaurant name and address, menu date, transcribed dishes and prices, AI dish images, and the original menu photos. It can be browsed or shared by link.</p>
-      <p>Upload restaurant menus you are allowed to share. Leave out photos of people, receipts, and any personal information. Remove private details from the photos before uploading.</p>
-      <p>Before upload, OpenAI uses the restaurant name and entered address to search public sources for the correct branch.</p>
-      <p>OpenAI reads your menu photos. Photos stay private while the menu is being prepared. If reading fails, you can retry from the same browser within 24 hours of uploading. The menu and its illustrations become public with the first dish photo. The original pages become public in the Original menu section once all illustrations are ready. Unpublished drafts expire, and photos from menus that already picture every dish are discarded.</p>
-      <p>Save the menu link to return to your draft. A cookie lets you open it in the browser you used to upload.</p>
-      <p>Menu Lens stores the requesting IP address and its approximate city, when supplied by Cloudflare, alongside generation times and AI usage costs. Only signed-in administrators can view these records.</p>
-      <p>GPS is optional and stays in your browser. Your browser uses it to compare your position with the restaurant coordinates when available.</p>
-      <p>Cloudflare Turnstile verifies submissions. Searching in Google Maps sends your query to Google.</p>
-      <h3 id="map-credits">Map data credits</h3><p>New Zealand restaurant search uses <a class="text-link" href="https://www.openstreetmap.org/copyright">© OpenStreetMap contributors</a>. The <a class="text-link" href="/data/nz-restaurants.json">New Zealand restaurant index</a> is available under the Open Database Licence.</p>
-    </div>`);
 }
 
 const state = {
@@ -837,20 +639,9 @@ function watchJob(id,onStatus,onError) {
 async function openSubmission(id) {
   const path='/jobs/'+id;
   const back=pagesBack('/explore','Explore menus');
-  if ($('#visual-menu')) {
-    bindMenu(id);
-    if ($('#visual-menu').dataset.state==='complete') return;
-  } else {
-    document.title='Menu progress · Menu Lens';
-    if (!$('#job-opening')) page('Opening your menu','MENU LENS','','',back);
-  }
   watchJob(id,async job=>{
     if (job.completed>0 || job.state==='complete') {
-      if (!$('#visual-menu')) {
-        main.innerHTML=renderMenu(await api('/menus/'+id));
-        bindMenu(id);
-      }
-      updateMenuPhotos(job);
+      location.reload();
       return;
     }
     const images=Number.isInteger(job.total);
@@ -934,19 +725,8 @@ async function openSubmission(id) {
   });
 }
 
-// Remove the list saved by older versions when this browser next visits.
-try {
-  for (const key of Object.keys(localStorage)) {
-    if (key.startsWith('menu-lens-submission-')) localStorage.removeItem(key);
-  }
-} catch {}
 
-const route = location.pathname.replace(/\/$/,'') || '/';
-if (route==='/admin') void import('./admin.js?v=7').then(({openAdmin})=>openAdmin({api,page,loadTurnstile,escape}));
-else if (route==='/create') buildFlow();
-else if (route==='/explore') void explore();
-else if (route==='/privacy') privacy();
-else if (route.startsWith('/menu/')) {
-  void openSubmission(route.split('/')[2]);
-
+if (mode==='admin') void import('./admin.js').then(({openAdmin})=>openAdmin({api,page,loadTurnstile,escape}));
+else if (mode==='create') buildFlow();
+else if (mode==='progress') void openSubmission(id);
 }

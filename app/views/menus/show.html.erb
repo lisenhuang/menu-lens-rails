@@ -1,0 +1,3 @@
+<div data-controller="menu" data-menu-id-value="<%= @menu[:id] %>" data-menu-live-value="<%= @menu[:state]!="complete" %>">
+  <%= render "menus/content", menu:@menu, can_retry:false %>
+</div>

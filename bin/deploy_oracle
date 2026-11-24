@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Invoked by deploy.sh over SSH with a clean, allowlisted release archive.
+set -euo pipefail
+umask 077
+base="$HOME/apps/menu-lens"
+release=$1
+repo_url=$2
+tag=$(basename "$release")
+image="menu-lens:$tag"
+vault="$base/private"
+test -s "$vault/runtime.env"
+exec 9>"$base/deploy.lock"
+flock -n 9
+docker build -t "$image" "$release"
+if [[ ! -s "$vault/rails.env" ]]; then
+  ruby_secret=$(openssl rand -hex 64)
+  echo "SECRET_KEY_BASE=$ruby_secret" > "$vault/rails.env"
+  unset ruby_secret
+fi
+chmod 600 "$vault/rails.env"
+env_args=(--env-file "$vault/runtime.env" --env-file "$vault/rails.env" -e PUBLIC_ORIGIN=https://menu.9l.nz -e TRUST_CLOUDFLARE=1 -e "SOURCE_REPOSITORY=$repo_url")
+isolated=(--rm --read-only --tmpfs /tmp:rw,size=96m -e DATA_DIR=/tmp/metadata)
+chmod -R a+rX "$release/public"
+prefix=$(docker run "${isolated[@]}" "${env_args[@]}" -v "$release/public:/assets:ro" "$image" bundle exec ruby bin/publish_assets /assets | tail -1)
+[[ "$prefix" =~ ^site/[a-f0-9]{64}$ ]]
+echo "$prefix" > "$release/r2-site-prefix"
+rm -r "$release/public"
+# Existing R2 prefixes and user media are retained. Only this release's assets receive a new prefix.
+map_key=$(docker inspect menu-lens-web --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^R2_MAP_KEY=//p')
+legacy_prefix=$(docker inspect menu-lens-web --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^LEGACY_SITE_PREFIX=//p')
+if [[ -z "$legacy_prefix" ]]; then
+  legacy_prefix=$(docker inspect menu-lens-web --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^R2_SITE_PREFIX=//p')
+fi
+env_args+=(-e "LEGACY_SITE_PREFIX=$legacy_prefix" -e "R2_SITE_PREFIX=$prefix" -e "R2_MAP_KEY=$map_key")
+backup="$vault/backups/$tag"
+stage=$(mktemp -d "$vault/rehearsal.XXXXXX")
+mkdir -p "$backup"
+stage_name="menu-lens-stage-$tag"
+old_name="menu-lens-previous-$tag"
+old_stopped=0
+old_renamed=0
+cleanup() {
+  code=$?
+  trap - EXIT
+  docker rm -f "$stage_name" >/dev/null 2>&1 || true
+  rm -rf "$stage"
+  if (( code!=0 && old_stopped )); then
+    if (( old_renamed )); then
+      docker rm -f menu-lens-web >/dev/null 2>&1 || true
+      docker rename "$old_name" menu-lens-web
+    fi
+    docker start menu-lens-web >/dev/null
+  fi
+  exit "$code"
+}
+trap cleanup EXIT
+common=(--read-only --tmpfs /tmp:rw,size=96m --cap-drop ALL --security-opt no-new-privileges --memory 768m --log-opt max-size=10m --log-opt max-file=3)
+snapshot() {
+  docker run --rm --read-only --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,size=32m -v menu-lens-data:/source:ro -v "$backup:/backup" "$image" bundle exec ruby bin/snapshot /source/menu.sqlite "/backup/$1"
+}
+snapshot rehearsal.sqlite
+cp "$backup/rehearsal.sqlite" "$stage/menu.sqlite"
+docker run -d --name "$stage_name" --user "$(id -u):$(id -g)" "${common[@]}" "${env_args[@]}" -e MENU_WORKERS=off -v "$stage:/data" -v "$backup:/backup:ro" -p 127.0.0.1::8080 "$image" >/dev/null
+health() {
+  for i in $(seq 1 45); do
+    if curl -fsS "http://127.0.0.1:$1/healthz" >/dev/null 2>&1 && curl -fsS "http://127.0.0.1:$1/api/config" | grep -q '"generation":true'; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+stage_port=$(docker port "$stage_name" 8080/tcp | cut -d: -f2)
+health "$stage_port"
+docker exec "$stage_name" bundle exec ruby bin/verify_release /backup/rehearsal.sqlite /data/menu.sqlite http://127.0.0.1:8080
+# Wait for paid generation to finish before replacing the web/worker process.
+active() {
+  docker run --rm --read-only -v menu-lens-data:/source:ro "$image" bundle exec ruby -rsqlite3 -e 'db=SQLite3::Database.new("/source/menu.sqlite",readonly:true); puts db.get_first_value(%q{SELECT (SELECT count(*) FROM menus WHERE state IN ("queued","running"))+(SELECT count(*) FROM drafts WHERE state IN ("waiting","uploading","reading"))}.tr(34.chr,39.chr))'
+}
+while [[ $(active) != 0 ]]; do sleep 5; done
+old_stopped=1
+docker stop --time 30 menu-lens-web >/dev/null
+if [[ $(active) != 0 ]]; then echo "A new submission arrived during cutover. Restoring previous service." >&2; exit 1; fi
+snapshot cutover.sqlite
+docker rename menu-lens-web "$old_name"
+old_renamed=1
+docker run -d --name menu-lens-web --network nine-l-nz --restart unless-stopped "${common[@]}" "${env_args[@]}" -v menu-lens-data:/data -p 127.0.0.1:8238:8080 "$image" >/dev/null
+health 8238
+echo "$tag" > "$base/current-release.next"
+mv -f "$base/current-release.next" "$base/current-release"
+echo "Activated $tag"

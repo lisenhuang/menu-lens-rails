@@ -1,0 +1,7 @@
+<turbo-frame id="menu-results" target="_top"><div id="menu-grid" class="dish-grid" aria-live="polite">
+<%= render partial:"menus/card",collection:@menus,as: :menu %>
+<% if @menus.empty? %>
+  <% if @query.present? %><p class="muted">No menus match that search. Try another dish, restaurant or area.</p>
+  <% else %><div class="panel collection-empty"><h2>No menus published yet</h2><a class="btn primary" href="/create">Upload a menu</a></div><% end %>
+<% end %>
+</div></turbo-frame>

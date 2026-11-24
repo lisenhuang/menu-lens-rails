@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+require "sqlite3"
+require "json"
+require "digest"
+# SQLite's online backup includes committed WAL pages and does not alter the source.
+source,target=ARGV
+abort "Expected a new backup path" unless source && target && !File.exist?(target)
+db=SQLite3::Database.new(source,readonly:true)
+db.busy_timeout=10_000
+db.execute("VACUUM INTO ?",[target])
+File.chmod(0600,target)
+copy=SQLite3::Database.new(target,readonly:true)
+abort "Backup integrity check failed" unless copy.get_first_value("PRAGMA integrity_check")=="ok"
+puts "SQLite backup verified"

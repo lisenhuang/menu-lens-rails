@@ -1,0 +1,8 @@
+default: &default
+  adapter: sqlite3
+  database: <%= File.join(ENV.fetch("DATA_DIR", Rails.root.join(".local").to_s), "menu.sqlite") %>
+  pool: 48
+  timeout: 10000
+production: *default
+development: *default
+test: *default

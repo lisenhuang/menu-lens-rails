@@ -1,0 +1,6 @@
+<article class="dish-card" id="<%= dish["id"] %>" data-position="<%= dish["position"] %>">
+  <% if dish["image"] %><a class="dish-image" href="<%= dish["image"] %>" data-view-image aria-haspopup="dialog"><img src="<%= dish["image"] %>" alt="AI illustration of <%= dish["name"] %>" width="780" height="500" loading="lazy"></a>
+  <% else %><div class="dish-image dish-pending" data-stage="<%= dish["active"] ? "active" : "waiting" %>"><span data-icon="utensils"></span><span><%= dish["active"] ? "Illustrating" : "Awaiting photo" %></span></div><% end %>
+  <div class="dish-body"><h3><%= dish["name"] %></h3><% if dish["price"].present? %><span class="price"><%= dish["price"] %></span><% end %>
+  <% if dish["description"].present? %><p class="description"><%= dish["description"] %></p><% end %></div>
+</article>

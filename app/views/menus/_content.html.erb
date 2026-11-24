@@ -1,0 +1,27 @@
+<div class="page visual-menu" id="visual-menu" data-state="<%= menu[:state] %>">
+  <a class="breadcrumb" href="/explore"><span data-icon="back"></span> Explore menus</a>
+  <section class="menu-cover"><div class="menu-cover-copy"><p class="eyebrow page-kicker">COMMUNITY VISUAL MENU</p>
+    <h1 class="page-title"><%= menu[:restaurant]["name"] %></h1><p class="page-intro"><%= menu[:restaurant]["address"] %></p>
+    <p class="hero-note"><span data-icon="calendar"></span> Photographed <%= menu_date(menu[:date]) %></p>
+    <div class="inline-actions"><button type="button" class="btn primary" data-action="menu#share"><span data-icon="link"></span> Copy link</button>
+      <a class="text-link" href="<%= maps_url(menu[:restaurant]) %>" target="_blank" rel="noopener noreferrer">Google Maps <span data-icon="external"></span></a></div></div>
+    <a href="<%= menu[:cover] %>" data-view-image aria-haspopup="dialog"><img src="<%= menu[:cover] %>" alt="AI illustration of <%= menu[:dishes].find { |d| d["image"]==menu[:cover] }&.fetch("name") %>" width="780" height="500"></a></section>
+  <% if menu[:state]!="complete" %><section class="live-photos" aria-label="Dish photo progress"><div class="live-summary" role="status">
+    <h2><%= menu[:state]=="error" ? "Illustrations paused" : "Illustrating the menu" %></h2>
+    <p><strong><%= menu[:completed] %> of <%= menu[:count] %> photos ready</strong> · <%= menu[:activePositions].size %> generating</p></div>
+    <progress id="live-meter" max="<%= menu[:count] %>" value="<%= menu[:completed] %>" aria-label="Dish photos ready"></progress>
+    <label class="ready-filter"><input type="checkbox" id="ready-filter" data-action="change->menu#filter"> Show ready photos only</label>
+    <% if can_retry %><button class="btn quiet small" data-action="menu#retry">Retry remaining images</button><% end %></section><% end %>
+  <p class="notice"><span data-icon="sparkles"></span><span>Dish images are AI illustrations. Confirm current prices, availability and allergens with the restaurant.</span></p>
+  <% groups=menu[:dishes].group_by { |d| d["section"] } %>
+  <% if groups.size>1 %><nav aria-label="Menu sections" class="menu-jumps"><% groups.keys.each_with_index do |section,i| %>
+    <a href="#section-<%= i %>"><%= section.presence || "Menu" %></a><% end %></nav><% end %>
+  <% groups.each_with_index do |(section,dishes),i| %><section class="menu-section" id="section-<%= i %>"><h2><%= section.presence || "Menu" %></h2>
+    <div class="dish-grid"><%= render partial:"menus/dish",collection:dishes,as: :dish %></div></section><% end %>
+  <% if menu[:notes].present? %><div class="panel menu-details"><h3>Notes from the menu</h3><p><%= menu[:notes] %></p></div><% end %>
+  <% if menu[:originals].any? %><details class="panel menu-details" id="original-menu"><summary>Original menu <small>· <%= pluralize(menu[:originalCount],"page") %></small></summary>
+    <div class="original-pages"><% menu[:originals].each_with_index do |url,i| %><a href="<%= url %>" data-view-image aria-haspopup="dialog"><img src="<%= url %>" loading="lazy" alt="Original menu page <%= i+1 %>"></a><% end %></div></details><% end %>
+  <% if menu[:versions].any? %><div class="panel menu-details"><h3>Other menus for this restaurant</h3><ul><% menu[:versions].each do |v| %>
+    <li><a class="text-link" href="/menu/<%= v["id"] %>"><%= menu_date(v["date"]) %></a> · Published <%= menu_date(v["created"]) %></li><% end %></ul></div><% end %>
+  <a href="/create" class="btn quiet"><span data-icon="plus"></span> Add a newer menu</a>
+</div>

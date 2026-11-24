@@ -1,0 +1,39 @@
+#!/usr/bin/env ruby
+require "sqlite3"
+require "digest"
+require "json"
+require "net/http"
+require "uri"
+baseline,live,base=ARGV
+old=SQLite3::Database.new(baseline,readonly:true)
+db=SQLite3::Database.new(live,readonly:true)
+abort "Integrity check failed" unless db.get_first_value("PRAGMA integrity_check")=="ok"
+old.execute("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'").flatten.each do |table|
+  raise "Unexpected table" unless table.match?(/\A[a-z_]+\z/)
+  query="SELECT * FROM #{table} ORDER BY rowid"
+  digest=->(database){ d=Digest::SHA256.new; database.execute(query){|row| d << Marshal.dump(row)}; d.hexdigest }
+  abort "Rows changed in #{table}" unless digest.call(old)==digest.call(db)
+end
+def get(base,path)
+  res=Net::HTTP.get_response(URI.join(base,path))
+  raise "HTTP #{res.code}: #{path}" unless res.is_a?(Net::HTTPSuccess)
+  res.body
+end
+expected=db.execute("SELECT id FROM menus WHERE EXISTS (SELECT 1 FROM dish_objects WHERE menu_id=menus.id)").flatten.sort
+cards=JSON.parse(get(base,"/api/menus"))
+abort "Published catalogue mismatch" unless cards.map { |r| r.fetch("id") }.sort==expected
+cards.each do |card|
+  id=card.fetch("id")
+  data=JSON.parse(get(base,"/api/menus/"+id))
+  payload=JSON.parse(db.get_first_value("SELECT payload FROM menus WHERE id=?",[id]))
+  abort "Dish information changed" unless data["dishes"].map { |d| d.slice("id","name","price","section","description") }==payload["dishes"].map { |d| d.slice("id","name","price","section","description") }
+  abort "Restaurant information changed" unless data["restaurant"]==payload["restaurant"]
+  abort "Menu page unavailable" unless get(base,"/menu/"+id).include?('id="visual-menu"')
+  abort "Invalid cover" unless get(base,card["cover"]).byteslice(8,4)=="WEBP"
+  if data["originals"].any?
+    abort "Invalid original page" unless get(base,data["originals"].first).b.start_with?("\xff\xd8".b)
+  end
+end
+abort "Missing Hotwire" unless get(base,"/explore?q=rice").include?('turbo-frame id="menu-results"') && get(base,"/application.js").include?("connectStreamSource")
+abort "Admin authentication disabled" unless Net::HTTP.get_response(URI.join(base,"/api/admin/settings")).code=="401"
+puts "Verified all existing SQLite tables, #{cards.size} published menus and #{db.get_first_value('SELECT count(*) FROM dish_objects')} image references"
