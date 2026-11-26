@@ -1,11 +1,12 @@
 class Menu < ApplicationRecord
+  def display_state = state == "credit_paused" ? "error" : state
   def content = JSON.parse(payload)
   def positions = Store.sql("SELECT position FROM dish_objects WHERE menu_id=? ORDER BY position", id).pluck("position")
   def public? = positions.any?
 
   def card(data = content, ready = positions)
     { id: id, restaurant: data.fetch("restaurant"), date: self[:date], published: created,
-      cover: "/media/#{id}/#{ready.first}.webp", state: state, count: data.fetch("dishes").size, completed: ready.size }
+      cover: "/media/#{id}/#{ready.first}.webp", state: display_state, count: data.fetch("dishes").size, completed: ready.size }
   end
 
   def self.collection(query = "")
@@ -34,9 +35,9 @@ class Menu < ApplicationRecord
     data = content
     ready = positions
     active = MenuWorkers.active(id)
-    { id: id, name: data.dig("restaurant","name"), state: state, completed: ready.size, total: data["dishes"].size,
+    { id: id, name: data.dig("restaurant","name"), state: display_state, completed: ready.size, total: data["dishes"].size,
       readyPositions: ready, activePositions: active, illustrating: active.map { |n| data["dishes"][n]["name"] },
-      canRetry: state == "error" && owner == owner_id && attempts < 3 }
+      canRetry: owner == owner_id && (state == "credit_paused" || (state == "error" && attempts < 3)) }
   end
 
   def public_view

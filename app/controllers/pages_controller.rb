@@ -21,6 +21,6 @@ class PagesController < ApplicationController
     head :moved_permanently
   end
   def configuration
-    render json:{siteKey:ENV["TURNSTILE_SITE_KEY"].to_s,generation:Store.ready?,places:ENV["GOOGLE_PLACES_API_KEY"].present? || Places.entries.any?,maxDishes:100}
+    render json:{siteKey:ENV["TURNSTILE_SITE_KEY"].to_s,generation:Store.ready?,submissionsPaused:!BillingBalance.available?,places:ENV["GOOGLE_PLACES_API_KEY"].present? || Places.entries.any?,maxDishes:100}
   end
 end

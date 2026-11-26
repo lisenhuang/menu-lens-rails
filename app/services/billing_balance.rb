@@ -7,12 +7,12 @@ module BillingBalance
     end
   end
 
-  class Exhausted < Paused; end
+  class ProviderBlocked < Paused; end
 
   module_function
 
-  def remaining_usd
-    Store.first(<<~SQL)&.fetch("remaining")
+  def snapshot
+    Store.first(<<~SQL)
       WITH charges AS (
         SELECT c.seq, COALESCE(c.usd, h.reserved_usd) AS usd, h.exhausted
         FROM generation_calls c
@@ -21,20 +21,24 @@ module BillingBalance
         WHERE c.state = 'running'
            OR julianday(COALESCE(h.finished, c.started)) >= julianday(s.checked)
       )
-      SELECT CASE
-        WHEN MAX(charges.exhausted) = 1 THEN 0
-        WHEN COUNT(charges.seq) = COUNT(charges.usd)
+      SELECT s.cents, s.organization, s.checked, COALESCE(MAX(charges.exhausted), 0) AS provider_blocked,
+        CASE WHEN typeof(s.cents) = 'integer' AND julianday(s.checked) <= julianday('now')
+          AND COUNT(charges.seq) = COUNT(charges.usd)
           THEN ROUND(s.cents / 100.0 - COALESCE(SUM(charges.usd), 0), 9)
       END AS remaining
       FROM billing_snapshot s LEFT JOIN charges ON TRUE
-      WHERE s.id = 1 AND typeof(s.cents) = 'integer' AND julianday(s.checked) <= julianday('now')
+      WHERE s.id = 1
       GROUP BY s.id
     SQL
   end
 
+  def available?
+    row = snapshot
+    !!(row && row["provider_blocked"].zero? && row["remaining"] && row["remaining"] >= MINIMUM_USD)
+  end
+
   def check!
-    remaining = remaining_usd
-    raise Paused unless remaining && remaining >= MINIMUM_USD
+    raise Paused unless available?
   end
 
   # Hold an estimated output charge while usage is outstanding. Keep it if the
@@ -48,6 +52,7 @@ module BillingBalance
       tokens = kind == "read" ? Providers::READ_OUTPUT_TOKENS : Providers::ADDRESS_OUTPUT_TOKENS
       tokens * rate / 1e6 + (kind == "address" ? Providers::ADDRESS_SEARCH_LIMIT * 0.01 : 0) if rate
     end
+    raise Paused unless estimate
     Store.sql("INSERT INTO billing_call_holds(call_seq, reserved_usd) VALUES (?, ?)", seq, estimate)
   end
 end

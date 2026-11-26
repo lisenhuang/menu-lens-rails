@@ -3,7 +3,7 @@ module MenuWorkers
   @lock=Monitor.new
   @signal=@lock.new_cond
   @active={}
-  @failed=Set.new
+  @failures={}
   @reads=Set.new
   def active(id) = @lock.synchronize { Array(@active[id]&.to_a).sort }
   def wake = @lock.synchronize { @signal.broadcast }
@@ -46,7 +46,7 @@ module MenuWorkers
       @next_expiry=Time.now+3600
       Store.transaction do
         %w[admin_sessions counters sessions].each { |t| Store.sql("DELETE FROM #{t} WHERE expires<=?",Store.now) }
-        stale=Menu.where(state:"error").where("created<? AND NOT EXISTS (SELECT 1 FROM dish_objects WHERE menu_id=menus.id)",7.days.ago.utc.iso8601)
+        stale=Menu.where(state:%w[error credit_paused]).where("created<? AND NOT EXISTS (SELECT 1 FROM dish_objects WHERE menu_id=menus.id)",7.days.ago.utc.iso8601)
         stale.each do |menu|
           Array(menu.content["originals"]).each { |k| Store.sql("INSERT OR IGNORE INTO object_cleanup VALUES(?)",k) }
           menu.delete
@@ -84,7 +84,7 @@ module MenuWorkers
         finished=[]
         chosen=nil
         menus.each do |m|
-          next if @failed.include?(m.id)
+          next if @failures.key?(m.id)
           current=@active[m.id] ||= Set.new
           done=saved[m.id] ||= m.positions.to_set
           pos=(0...m.content["dishes"].size).find { |i| !done.include?(i) && !current.include?(i) }
@@ -92,7 +92,7 @@ module MenuWorkers
             chosen=[m,pos]
             break
           elsif current.empty?
-            finish(m.id,false)
+            finish(m.id,"complete")
             finished << m.id
           end
         end
@@ -107,29 +107,30 @@ module MenuWorkers
       end
     end
   end
-  def finish(id,failed)
-    if failed
-      Menu.where(id:id).update_all(state:"error")
-    else
-      Menu.where(id:id).update_all(state:"complete",created:Store.stamp)
-    end
+  def finish(id,state)
+    fields = {state: state}
+    fields[:created] = Store.stamp if state == "complete"
+    Menu.where(id:id).update_all(fields)
     @active.delete(id)
-    @failed.delete(id)
+    @failures.delete(id)
     ProgressEvents.publish(id)
   end
   def illustrate(id,i)
-    failed=false
+    failure=nil
     begin
       Rails.application.executor.wrap { IllustrateDishJob.perform_now(id,i) }
+    rescue BillingBalance::Paused
+      failure="credit_paused"
     rescue StandardError => e
-      failed=true
+      failure="error"
       Rails.logger.warn("Dish generation failed (#{e.class})")
     ensure
       Rails.application.executor.wrap do
         @lock.synchronize do
           @active.fetch(id).delete(i)
-          @failed.add(id) if failed
-          finish(id,true) if @failed.include?(id) && @active[id].empty?
+          # A genuine generation error still counts when another dish was paused.
+          @failures[id] = failure if failure && @failures[id] != "error"
+          finish(id,@failures[id]) if @failures.key?(id) && @active[id].empty?
           ProgressEvents.publish(id)
           @signal.broadcast
         end

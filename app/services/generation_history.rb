@@ -43,9 +43,13 @@ module GenerationHistory
     return [estimate*30/1e6,"output estimate"] if kind=="image" && output && estimate
     [nil,"unknown"]
   end
-  def measure(id,kind,label,model,level,request_ip=nil)
+  def measure(id,kind,label,model,level,request_ip=nil,restaurant:nil,request_city:nil)
     seq = Store.transaction do
       BillingBalance.check!
+      if restaurant
+        register(id,restaurant,request_ip)
+        city(id,request_ip,request_city)
+      end
       call_seq = Store.first(<<~SQL, Store.stamp, kind, label, model, level, kind, ip(request_ip), id).fetch("seq")
         INSERT INTO generation_calls(run_id,started,kind,label,model,level,ip,state)
         SELECT id,?,?,?,?,?,CASE WHEN ?='image' THEN image_ip ELSE COALESCE(?,upload_ip) END,'running'
@@ -55,17 +59,23 @@ module GenerationHistory
       call_seq
     end
     state="failed"
-    result=yield lambda { |usage,output=false|
-      usd,basis=price(kind,model,level,usage,output)
-      Store.sql("UPDATE generation_calls SET usd=?,basis=?,usage=? WHERE seq=?",usd,basis,usage&.to_json,seq)
+    usd, basis, reported_usage = nil, "unknown", nil
+    result=yield lambda { |usage,output=false,rejected:false|
+      usd, basis = rejected ? [0, "request rejected"] : price(kind,model,level,usage,output)
+      reported_usage = usage
     }
     state="complete"
     result
-  rescue BillingBalance::Exhausted
-    Store.sql("UPDATE billing_call_holds SET exhausted=1 WHERE call_seq=?", seq)
+  rescue BillingBalance::ProviderBlocked
+    blocked = true
     raise
   ensure
-    Store.sql("UPDATE generation_calls SET state=? WHERE seq=?",state,seq) if seq
+    if seq
+      Store.transaction do
+        Store.sql("UPDATE billing_call_holds SET exhausted=1 WHERE call_seq=?", seq) if blocked
+        Store.sql("UPDATE generation_calls SET state=?,usd=?,basis=?,usage=? WHERE seq=?",state,usd,basis,reported_usage&.to_json,seq)
+      end
+    end
   end
   def list(before)
     rows=Store.sql(Rails.root.join("db/history.sql").read,before)

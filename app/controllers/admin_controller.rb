@@ -21,11 +21,12 @@ class AdminController < ApiController
     render json:{ok:true}
   end
   def settings
+    credit = BillingBalance.snapshot
     current=Settings.current
     render json:{settings:current,imageModels:Settings::IMAGES,readingModels:Settings::READERS,outputUsdPerMillion:30,
       readingModel:current["readingModel"],readingEfforts:Settings::READERS.dig(current["readingModel"],"efforts"),
-      estimatedBalanceUsd:BillingBalance.remaining_usd, minimumBalanceUsd:BillingBalance::MINIMUM_USD,
-      balance:Store.first("SELECT cents,organization,checked FROM billing_snapshot WHERE id=1")}
+      estimatedBalanceUsd: credit&.fetch("remaining"), minimumBalanceUsd: BillingBalance::MINIMUM_USD,
+      providerBillingBlocked: credit&.fetch("provider_blocked") == 1, balance: credit&.slice("cents","organization","checked")}
   end
   def save = render(json:{settings:Settings.save(body(2048))})
   def history

@@ -8,6 +8,7 @@ abort "Usage: bin/record_balance USD 'billing organisation' ISO8601_TIME" unless
 abort "Enter the balance in USD with up to two decimal places" unless amount.match?(/\A-?\d{1,12}(?:\.\d{1,2})?\z/)
 abort "Enter the billing organisation" if organization.strip.empty?
 begin
+  abort "Include a time zone, such as Z or +13:00" unless checked.match?(/(?:Z|[+-]\d{2}:?\d{2})\z/)
   observed = Time.iso8601(checked)
 rescue ArgumentError
   abort "Enter the time the balance was checked in ISO 8601 format"

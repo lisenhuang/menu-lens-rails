@@ -1,5 +1,8 @@
 class ApiController < ApplicationController
   before_action :same_origin, if: -> { request.post? }
+  rescue_from BillingBalance::Paused do |error|
+    render json:{error:error.message,code:"generation_paused"},status:error.status
+  end
   private
   def same_origin
     raise Problem.new(403,"Open Menu Lens to submit a request.") unless request.headers["Origin"]==public_origin && request.headers["Sec-Fetch-Site"]!="cross-site"

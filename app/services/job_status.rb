@@ -12,7 +12,8 @@ module JobStatus
     s=draft.submission_session
     r=s.info.fetch("restaurant")
     reading=draft.state=="reading" && !!Store.first("SELECT 1 FROM generation_calls WHERE run_id=? AND kind='read' AND state='running'",id)
-    {id:id,name:r["name"],restaurant:r,date:s.info["date"],state:draft.state,error:draft.error,pageCount:draft.page_keys.size,
-      transcribing:reading,readAttempt:s.reads,expires:s.expires,canRetryRead:draft.state=="read_error" && draft.page_keys.any? && s.reads<3}
+    paused = draft.state == "read_paused"
+    {id:id,name:r["name"],restaurant:r,date:s.info["date"],state:paused ? "read_error" : draft.state,error:draft.error,pageCount:draft.page_keys.size,
+      transcribing:reading,readAttempt:s.reads,expires:s.expires,canRetryRead:draft.page_keys.any? && (paused || (draft.state=="read_error" && s.reads<3))}
   end
 end

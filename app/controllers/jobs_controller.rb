@@ -49,10 +49,11 @@ class JobsController < ApiController
     render json:{id:@id},status:202
   end
   define_method(:retry) do
-    rate("retry",6,600)
     Store.transaction do
       Submissions.image_capacity!
-      n=Menu.where(id:@id,owner:@owner,state:"error").where("attempts<3").update_all("state='queued',attempts=attempts+1")
+      rate("retry",6,600)
+      n=Menu.where(id:@id,owner:@owner).where("state='credit_paused' OR (state='error' AND attempts<3)")
+        .update_all("attempts=attempts+CASE WHEN state='error' THEN 1 ELSE 0 END, state='queued'")
       raise Problem.new(409,"This menu cannot be retried right now.") unless n==1
       GenerationHistory.image_requester(@id,client_ip)
       GenerationHistory.city(@id,client_ip,city)

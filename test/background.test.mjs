@@ -35,6 +35,7 @@ test('private uploads and approved illustrations finish with no client connected
   let imageCalls=0;
   let readCalls=0;
   let failReading=false;
+  let readingBillingError=false;
   let addressReply=null;
   let addressRequests=0;
   const sourceUrl='https://restaurant.example/locations';
@@ -67,9 +68,9 @@ test('private uploads and approved illustrations finish with no client connected
       assert.deepEqual(extra,{});
       assert.equal(check.store,false);
       addressRequests++;
-      if (addressReply==='exhausted') {
-        res.statusCode=429;
-        return res.end(JSON.stringify({error:{code:'credit_balance_exhausted'}}));
+      if (addressReply?.error) {
+        res.statusCode=addressReply.httpStatus;
+        return res.end(JSON.stringify({status:'failed',error:addressReply.error}));
       }
       if (addressReply==='offline') {res.statusCode=503;return res.end('{}');}
       const verdict=addressReply || {status:'match',options:[{label:name,address,sourceUrl}]};
@@ -81,6 +82,10 @@ test('private uploads and approved illustrations finish with no client connected
       readingRequest=JSON.parse(body);
       readCalls++;
       while (holdRead && !res.destroyed) await delay(10);
+      if (readingBillingError) {
+        res.statusCode=429;
+        return res.end(JSON.stringify({error:{code:'insufficient_quota'}}));
+      }
       if (failReading) {res.statusCode=503;return res.end('{}');}
       response={status:'completed',usage:{input_tokens:400,input_tokens_details:{cached_tokens:80},output_tokens:95},output:[{content:[{type:'output_text',text:JSON.stringify(visionResult)}]}]};
     } else if (req.url==='/v1/images/generations') {
@@ -211,8 +216,8 @@ test('private uploads and approved illustrations finish with no client connected
   assert.equal((await login({pin,token:'admin-valid'})).status,403);
   const defaults=await (await request(settingsPath,admin)).json();
   assert.equal(defaults.balance,null);
-  const creditCheck=()=>request('/api/verify','',{name:'Credit test',address:'Example Street',date:'2025-01-01',
-    consent:true,shareOriginals:true,autoPublish:true,token:'test'},'192.0.2.201');
+  const creditCheck=(ip='192.0.2.201')=>request('/api/verify','',{name:'Credit test',address:'Example Street',date:'2025-01-01',
+    consent:true,shareOriginals:true,autoPublish:true,token:'test'},ip);
   assert.equal((await creditCheck()).status,503);
   assert.equal(addressRequests,0);
   assert.equal((await request('/api/admin/balance',admin,{organization:'Example',usd:'12.34'})).status,404);
@@ -644,7 +649,10 @@ test('private uploads and approved illustrations finish with no client connected
     assert.equal((await creditCheck()).status,503);
     assert.equal(addressRequests,before);
     record(1000);
-    const attempts=await Promise.all(Array.from({length:3},creditCheck));
+    const runCount=()=>db.prepare("SELECT COUNT(*) AS n FROM generation_runs").get().n;
+    const beforeRuns=runCount();
+    const attempts=await Promise.all(Array.from({length:3},()=>creditCheck()));
+    assert.equal(runCount(),beforeRuns+1);
     assert.deepEqual(attempts.map(r=>r.status).sort(),[200,503,503]);
     assert.equal(addressRequests,before+1);
     const accepted=attempts.find(r=>r.ok);
@@ -653,7 +661,9 @@ test('private uploads and approved illustrations finish with no client connected
     const post=(action,body)=>request(path+'/'+action,owner,body,'192.0.2.201');
     const status=async()=>(await request(path,owner)).json();
     const readsBefore=readCalls,imagesBefore=imageCalls;
-    assert.equal((await post('upload',{pages:[photo]})).status,503);
+    const refusedUpload=await post('upload',{pages:[photo]});
+    assert.equal(refusedUpload.status,503);
+    assert.equal((await refusedUpload.json()).code,'generation_paused');
     assert.equal(readCalls,readsBefore);
 
     record(2000);
@@ -671,19 +681,106 @@ test('private uploads and approved illustrations finish with no client connected
     assert.equal(addressRequests,before+1);
     assert.equal(db.prepare('SELECT attempts FROM menus WHERE id=?').get(path.split('/').at(-1)).attempts,0);
 
+    // A worker-side credit pause also preserves a menu on its last retry.
+    db.prepare('UPDATE menus SET attempts=3 WHERE id=?').run(path.split('/').at(-1));
+    const paused=await status();
+    assert.equal(paused.canRetry,true);
     record(2000);
     assert.equal((await post('retry',{})).status,202);
     await until(async()=>(await status()).state==='complete');
     assert.equal(imageCalls,imagesBefore+1);
     assert.equal(readCalls,readsBefore+1);
 
-    addressReply='exhausted';
+    addressReply={httpStatus:429,error:{code:'credit_balance_exhausted'}};
     assert.equal((await creditCheck()).status,503);
     addressReply=null;
     assert.equal((await creditCheck()).status,503);
     assert.equal(addressRequests,before+2);
     record(2000);
     assert.equal((await creditCheck()).status,200);
+  });
+  await t.test('billing limits survive restarts and standard throttling allows a later request',async t=>{
+    const db=new DatabaseSync(join(dir,'menu.sqlite'));
+    t.after(()=>db.close());
+    const signIn=await login({pin,token:'admin-credit-review'});
+    assert.equal(signIn.status,200);
+    const reviewer=signIn.headers.getSetCookie()[0].split(';')[0];
+    const details=async()=>{
+      const response=await request(settingsPath,reviewer);
+      assert.equal(response.status,200);
+      return response.json();
+    };
+    for (const failure of [
+      {httpStatus:429,error:{type:'insufficient_quota',code:'project_spend_limit_exceeded'}},
+      {httpStatus:200,error:{code:'organization_spend_limit_exceeded'}},
+      {httpStatus:429,error:{type:'insufficient_quota'}},
+    ]) {
+      addressReply=failure;
+      assert.equal((await creditCheck('192.0.2.211')).status,503);
+      addressReply=null;
+      if (failure.httpStatus===200) {await stop();await start();}
+      const before=addressRequests;
+      assert.equal((await creditCheck('192.0.2.211')).status,503);
+      assert.equal(addressRequests,before);
+      const data=await details();
+      assert.equal(data.providerBillingBlocked,true);
+      const availability=await (await request('/api/config')).json();
+      assert.equal(availability.submissionsPaused,true);
+      assert.equal(availability.estimatedBalanceUsd,undefined);
+      assert.ok(data.estimatedBalanceUsd>10,'A project limit does not set the credit estimate to zero');
+      await delay(4);
+      db.prepare('UPDATE billing_snapshot SET cents=2000,checked=?').run(new Date().toISOString());
+      assert.equal((await details()).providerBillingBlocked,false);
+    }
+    db.prepare('UPDATE billing_snapshot SET cents=1000,checked=?').run(new Date().toISOString());
+    addressReply={httpStatus:429,error:{code:'rate_limit_exceeded'}};
+    await verify('Throttled address',undefined,false,'192.0.2.212');
+    assert.equal((await details()).estimatedBalanceUsd,10);
+    addressReply=null;
+    assert.equal((await creditCheck('192.0.2.212')).status,200);
+    // Legacy calls without usage or a hold must pause spending until a later snapshot.
+    const run=db.prepare('SELECT id FROM generation_runs LIMIT 1').get().id;
+    db.prepare("INSERT INTO generation_calls(run_id,started,kind,label,model,level,state) VALUES(?,?,'read','legacy','gpt-5-mini','low','interrupted')").run(run,new Date().toISOString());
+    assert.equal((await details()).estimatedBalanceUsd,null);
+    assert.equal((await creditCheck('192.0.2.212')).status,503);
+    await delay(4);
+    db.prepare('UPDATE billing_snapshot SET checked=?').run(new Date().toISOString());
+    assert.ok((await details()).estimatedBalanceUsd>=10);
+    db.prepare('UPDATE billing_snapshot SET cents=2000,checked=?').run(new Date().toISOString());
+  });
+  await t.test('a private read paused on its third attempt can resume after billing recovers',async t=>{
+    const db=new DatabaseSync(join(dir,'menu.sqlite'));
+    t.after(()=>db.close());
+    const ip='192.0.2.213';
+    const job=await verify('Final read retry',undefined,false,ip);
+    const path='/api/jobs/'+job.id;
+    const post=(action,body)=>request(path+'/'+action,job.cookie,body,ip);
+    const status=async()=> (await (await request(path,job.cookie)).json());
+    failReading=true;
+    assert.equal((await post('upload',{pages:[photo]})).status,202);
+    await until(async()=>(await status()).state==='read_error');
+    assert.equal((await post('retry-read',{attempt:1})).status,202);
+    await until(async()=>(await status()).state==='read_error');
+    failReading=false;
+    readingBillingError=true;
+    assert.equal((await post('retry-read',{attempt:2})).status,202);
+    await until(async()=>(await status()).state==='read_error');
+    const paused=await status();
+    assert.equal(paused.readAttempt,3);
+    assert.equal(paused.canRetryRead,true);
+    assert.equal((await post('retry-read',{attempt:3})).status,503);
+    readingBillingError=false;
+    const before=readCalls;
+    await delay(4);
+    db.prepare('UPDATE billing_snapshot SET cents=2000,checked=?').run(new Date().toISOString());
+    holdRead=true;
+    assert.equal((await post('retry-read',{attempt:3})).status,202);
+    assert.equal((await post('retry-read',{attempt:3})).status,202);
+    holdRead=false;
+    await until(async()=>(await status()).state==='review');
+    assert.equal(readCalls,before+1);
+    assert.equal((await status()).readAttempt,3);
+    assert.equal((await request('/originals/'+job.id+'/0.jpg')).status,404);
   });
   assert.equal((await request('/fonts/dm-sans-OFL.txt')).status,200);
   assert.equal((await request('/api/verify','',{name:'Consent test',consent:true,locationConfirmed:true})).status,403);

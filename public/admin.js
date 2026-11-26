@@ -130,12 +130,14 @@ export async function openAdmin({api,page,loadTurnstile,escape}) {
     showBalance(data);
     showHistory();
   }
-  function showBalance({balance:record,estimatedBalanceUsd,minimumBalanceUsd}) {
+  function showBalance({balance:record,estimatedBalanceUsd,minimumBalanceUsd,providerBillingBlocked}) {
     const usd=new Intl.NumberFormat('en-NZ',{style:'currency',currency:'USD',roundingMode:'floor'});
     document.querySelector('#credit-value').textContent=record ? usd.format(record.cents/100) : 'Awaiting first check';
     const checked=record && new Date(record.checked).toLocaleString('en-NZ',{dateStyle:'medium',timeStyle:'short',timeZone:'Pacific/Auckland'});
     const cutoff=document.querySelector('#credit-cutoff');
-    if (estimatedBalanceUsd == null) {
+    if (providerBillingBlocked) {
+      cutoff.textContent='AI requests paused by OpenAI billing. Check the credits and limits for this project, then record a fresh balance.';
+    } else if (estimatedBalanceUsd == null) {
       cutoff.textContent='AI requests paused until the credit balance can be verified.';
     } else {
       const status=estimatedBalanceUsd<minimumBalanceUsd ? 'paused' : 'enabled';
@@ -168,10 +170,11 @@ export async function openAdmin({api,page,loadTurnstile,escape}) {
         <small>${escape(call.model)} · ${escape(call.level)}</small></div>
         <span class="history-price"><strong>${amount}</strong><small>${escape(call.basis)}</small></span></li>`;
     }
-    async function load(older) {
+    async function load(older,refreshBalance=false) {
       more.disabled=refresh.disabled=true;
       message.textContent='Loading history…';
       try {
+        if (refreshBalance) showBalance(await api('/admin/settings'));
         const {runs,next}=await api('/admin/history'+(older ? '?before='+cursor : ''));
         if (!older) list.replaceChildren();
         for (const run of runs) {
@@ -201,7 +204,7 @@ export async function openAdmin({api,page,loadTurnstile,escape}) {
       } finally {more.disabled=refresh.disabled=false;}
     }
     more.onclick=()=>load(true);
-    refresh.onclick=()=>load(false);
+    refresh.onclick=()=>load(false,true);
     void load(false);
   }
   async function loadSettings() {

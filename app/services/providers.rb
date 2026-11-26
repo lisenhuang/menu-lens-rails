@@ -4,6 +4,9 @@ module Providers
   READ_OUTPUT_TOKENS = 24_000
   ADDRESS_OUTPUT_TOKENS = 3_500
   ADDRESS_SEARCH_LIMIT = 6
+  BILLING_ERRORS = %w[credit_balance_exhausted insufficient_quota billing_hard_limit_reached
+                      organization_spend_limit_exceeded project_spend_limit_exceeded organization_usage_limit_exceeded].freeze
+  RATE_LIMIT_ERRORS = %w[rate_limit_exceeded rate_limit_error slow_down].freeze
   STRING = {type: "string"}.freeze
   def fields(properties) = {type:"object", properties:properties, required:properties.keys, additionalProperties:false}
   def structured(name,schema) = {format:{type:"json_schema",name:name,strict:true,schema:schema}}
@@ -21,9 +24,17 @@ module Providers
     reply=HttpClient.call("https://api.openai.com/v1/"+path,method: :post,body:params.to_json,
       headers:{"Authorization"=>"Bearer "+ENV.fetch("OPENAI_API_KEY"),"Content-Type"=>"application/json"},timeout:timeout)
     data=JSON.parse(reply.body)
-    unless reply.is_a?(Net::HTTPSuccess)
-      received.call(data["usage"],false) if data["usage"]
-      raise BillingBalance::Exhausted if reply.code == "429" && data.dig("error", "code") == "credit_balance_exhausted"
+    if !reply.is_a?(Net::HTTPSuccess) || data["status"] == "failed"
+      error = data["error"]
+      code = error["code"].presence || error["type"] if error.is_a?(Hash)
+      billing = BILLING_ERRORS.include?(code)
+      throttled = reply.code == "429" && RATE_LIMIT_ERRORS.include?(code)
+      if data["usage"]
+        received.call(data["usage"])
+      elsif reply.is_a?(Net::HTTPClientError) && (billing || throttled)
+        received.call(nil, rejected: true)
+      end
+      raise BillingBalance::ProviderBlocked if billing
       raise Problem.new(502,"The AI service could not complete this request. Please try again.")
     end
     data

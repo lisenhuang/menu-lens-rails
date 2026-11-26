@@ -20,14 +20,11 @@ module Submissions
     parsed=Date.iso8601(date) rescue nil
     raise Problem.new(400,"Enter the date the menu was photographed.") unless parsed && parsed.iso8601==date && parsed.between?(Date.new(1900),Time.now.utc.to_date+1)
     Providers.verify_person(b["token"],ip)
-    BillingBalance.check!
     token=SecureRandom.hex(32)
     owner=Store.sha(token)
     id=Store.submission_id(owner)
-    GenerationHistory.register(id,name,ip)
-    GenerationHistory.city(id,ip,city)
     verdict=begin
-      GenerationHistory.measure(id,"address","Restaurant address check","gpt-6.1-terra","medium",ip) { |usage| Providers.address(place,usage) }
+      GenerationHistory.measure(id,"address","Restaurant address check","gpt-6.1-terra","medium",ip,restaurant:name,request_city:city) { |usage| Providers.address(place,usage) }
     rescue BillingBalance::Paused
       raise
     rescue StandardError => e
@@ -67,13 +64,14 @@ module Submissions
     staged=Store.first("SELECT count(*) AS n FROM drafts JOIN sessions ON sessions.id=drafts.owner WHERE drafts.state IN ('uploading','waiting','reading') AND json_extract(details,'$.autoPublish')=1")["n"]
     raise Problem.new(429,"The image queue is full. Please try again later.") if queued+staged>=3
   end
-  def reserve_read(session)
+  def reserve_read(session, resume: false)
     raise Problem.new(429,"The reading queue is full.") if Draft.where(state:%w[waiting uploading reading]).count>=3
     if session.info["autoPublish"]
       image_capacity!
     else
       BillingBalance.check!
     end
+    return if resume
     raise Problem.new(429,"This draft has reached its reading limit or expired.") unless SubmissionSession.valid.where(id:session.id).where("reads<3").update_all("reads=reads+1")==1
     Store.capacity!("reading:daily",45,86_400_000)
   end
@@ -130,9 +128,9 @@ module Submissions
       session.reload
       draft=Draft.find_by!(id:id,owner:session.id)
       raise Problem.new(400,"Reopen this draft to retry.") unless attempt.is_a?(Integer) && attempt.between?(1,session.reads)
-      return if attempt<session.reads
-      raise Problem.new(409,"No saved photos are available to retry.") unless draft.state=="read_error" && draft.page_keys.any?
-      reserve_read(session)
+      return if attempt<session.reads || %w[waiting reading].include?(draft.state)
+      raise Problem.new(409,"No saved photos are available to retry.") unless %w[read_error read_paused].include?(draft.state) && draft.page_keys.any?
+      reserve_read(session, resume: draft.state=="read_paused")
       GenerationHistory.city(id,ip,city)
       draft.update!(state:"waiting",error:nil,read_ip:ip)
     end

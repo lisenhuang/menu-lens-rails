@@ -15,6 +15,8 @@ class ReadMenuJob < ActiveJob::Base
     else
       draft.update!(state:"review",result:result.to_json)
     end
+  rescue BillingBalance::Paused => e
+    Draft.where(id:id).update_all(state:"read_paused",error:e.message)
   rescue StandardError => e
     Draft.where(id:id).update_all(state:"read_error",error:e.is_a?(Problem) ? e.message : "The menu could not be read. Try again with a clear photo.")
     Rails.logger.warn("Menu reading failed (#{e.class})")

@@ -38,6 +38,7 @@ function uploadPhotos(id,pages,onProgress) {
     }
     request.onload=()=>{
       if (request.status===202 && request.response?.id===id) return resolve();
+      if (request.response?.code==='generation_paused') return reject(new Error(request.response.error));
       if (!request.response?.error || request.status>=500) return unconfirmed();
       reject(new Error(request.response.error));
     };
@@ -182,8 +183,9 @@ function updateUpload() {
     state.files.splice(Number(button.dataset.remove),1);
     updateUpload();
   });
-  $('#next').disabled=!state.files.length || Boolean(batch);
-  $('#availability').innerHTML=state.config?.generation===false ?
+  const unavailable=state.config?.generation===false || state.config?.submissionsPaused;
+  $('#next').disabled=!state.files.length || Boolean(batch) || Boolean(unavailable);
+  $('#availability').innerHTML=unavailable ?
     notice('Menu submissions are temporarily unavailable. Please try again later.') : '';
 }
 async function addFiles(files) {
@@ -543,7 +545,7 @@ async function setupGeneration(form) {
   };
   await configRequest;
   if (!form.isConnected) return;
-  if (!state.config?.generation) {
+  if (!state.config?.generation || state.config.submissionsPaused) {
     errorAt(error,'New menu generation is temporarily unavailable.');
     return;
   }
