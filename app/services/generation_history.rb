@@ -44,7 +44,16 @@ module GenerationHistory
     [nil,"unknown"]
   end
   def measure(id,kind,label,model,level,request_ip=nil)
-    seq=Store.first("INSERT INTO generation_calls(run_id,started,kind,label,model,level,ip,state) SELECT id,?,?,?,?,?,CASE WHEN ?='image' THEN image_ip ELSE COALESCE(?,upload_ip) END,'running' FROM generation_runs WHERE id=? RETURNING seq",Store.stamp,kind,label,model,level,kind,ip(request_ip),id).fetch("seq")
+    seq = Store.transaction do
+      BillingBalance.check!
+      call_seq = Store.first(<<~SQL, Store.stamp, kind, label, model, level, kind, ip(request_ip), id).fetch("seq")
+        INSERT INTO generation_calls(run_id,started,kind,label,model,level,ip,state)
+        SELECT id,?,?,?,?,?,CASE WHEN ?='image' THEN image_ip ELSE COALESCE(?,upload_ip) END,'running'
+        FROM generation_runs WHERE id=? RETURNING seq
+      SQL
+      BillingBalance.reserve(call_seq, kind, model, level)
+      call_seq
+    end
     state="failed"
     result=yield lambda { |usage,output=false|
       usd,basis=price(kind,model,level,usage,output)
@@ -52,6 +61,9 @@ module GenerationHistory
     }
     state="complete"
     result
+  rescue BillingBalance::Exhausted
+    Store.sql("UPDATE billing_call_holds SET exhausted=1 WHERE call_seq=?", seq)
+    raise
   ensure
     Store.sql("UPDATE generation_calls SET state=? WHERE seq=?",state,seq) if seq
   end

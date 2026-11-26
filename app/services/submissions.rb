@@ -20,6 +20,7 @@ module Submissions
     parsed=Date.iso8601(date) rescue nil
     raise Problem.new(400,"Enter the date the menu was photographed.") unless parsed && parsed.iso8601==date && parsed.between?(Date.new(1900),Time.now.utc.to_date+1)
     Providers.verify_person(b["token"],ip)
+    BillingBalance.check!
     token=SecureRandom.hex(32)
     owner=Store.sha(token)
     id=Store.submission_id(owner)
@@ -27,6 +28,8 @@ module Submissions
     GenerationHistory.city(id,ip,city)
     verdict=begin
       GenerationHistory.measure(id,"address","Restaurant address check","gpt-6.1-terra","medium",ip) { |usage| Providers.address(place,usage) }
+    rescue BillingBalance::Paused
+      raise
     rescue StandardError => e
       Rails.logger.warn("Address verification unavailable (#{e.class})")
       {status:"unverified",options:[]}
@@ -59,13 +62,18 @@ module Submissions
     end
   end
   def image_capacity!
+    BillingBalance.check!
     queued=Menu.where(state:%w[queued running]).count
     staged=Store.first("SELECT count(*) AS n FROM drafts JOIN sessions ON sessions.id=drafts.owner WHERE drafts.state IN ('uploading','waiting','reading') AND json_extract(details,'$.autoPublish')=1")["n"]
     raise Problem.new(429,"The image queue is full. Please try again later.") if queued+staged>=3
   end
   def reserve_read(session)
     raise Problem.new(429,"The reading queue is full.") if Draft.where(state:%w[waiting uploading reading]).count>=3
-    image_capacity! if session.info["autoPublish"]
+    if session.info["autoPublish"]
+      image_capacity!
+    else
+      BillingBalance.check!
+    end
     raise Problem.new(429,"This draft has reached its reading limit or expired.") unless SubmissionSession.valid.where(id:session.id).where("reads<3").update_all("reads=reads+1")==1
     Store.capacity!("reading:daily",45,86_400_000)
   end

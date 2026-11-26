@@ -73,7 +73,7 @@ export async function openAdmin({api,page,loadTurnstile,escape}) {
       </form>
       <section class="panel history-panel" aria-labelledby="history-heading">
         <section class="billing-credit" aria-labelledby="billing-heading"><h2 id="billing-heading">OpenAI credit balance</h2>
-          <strong id="credit-value"></strong><p class="field-hint" id="credit-checked"></p>
+          <strong id="credit-value"></strong><p class="field-hint" id="credit-checked"></p><p id="credit-cutoff"></p>
           <div><a class="text-link" href="https://platform.openai.com/settings/organization/billing/overview" target="_blank" rel="noopener noreferrer">Open OpenAI Billing ↗</a></div>
         </section>
         <div class="history-heading"><h2 id="history-heading">Generation history</h2><button type="button" id="refresh-history" class="btn quiet small">Refresh</button></div>
@@ -127,13 +127,20 @@ export async function openAdmin({api,page,loadTurnstile,escape}) {
       catch(error) {if(error.status===401) return login();message.textContent=error.message;}
     };
     sync();
-    showBalance(data.balance);
+    showBalance(data);
     showHistory();
   }
-  function showBalance(record) {
-    document.querySelector('#credit-value').textContent=record ?
-      new Intl.NumberFormat('en-NZ',{style:'currency',currency:'USD'}).format(record.cents/100) : 'Awaiting first check';
+  function showBalance({balance:record,estimatedBalanceUsd,minimumBalanceUsd}) {
+    const usd=new Intl.NumberFormat('en-NZ',{style:'currency',currency:'USD',roundingMode:'floor'});
+    document.querySelector('#credit-value').textContent=record ? usd.format(record.cents/100) : 'Awaiting first check';
     const checked=record && new Date(record.checked).toLocaleString('en-NZ',{dateStyle:'medium',timeStyle:'short',timeZone:'Pacific/Auckland'});
+    const cutoff=document.querySelector('#credit-cutoff');
+    if (estimatedBalanceUsd == null) {
+      cutoff.textContent='AI requests paused until the credit balance can be verified.';
+    } else {
+      const status=estimatedBalanceUsd<minimumBalanceUsd ? 'paused' : 'enabled';
+      cutoff.textContent=`AI requests ${status}. Estimated available credit ${usd.format(estimatedBalanceUsd)}. Cutoff ${usd.format(minimumBalanceUsd)}.`;
+    }
     document.querySelector('#credit-checked').textContent=record ?
       `${record.organization} · Manually checked ${checked} (NZ time)` : 'Check your organization’s balance in OpenAI Billing.';
   }

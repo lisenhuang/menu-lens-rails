@@ -39,3 +39,15 @@ CREATE TABLE IF NOT EXISTS generation_runs (
       state TEXT NOT NULL, usd REAL, basis TEXT NOT NULL DEFAULT 'unknown', usage TEXT
     );
     CREATE INDEX IF NOT EXISTS generation_calls_run ON generation_calls(run_id,seq);
+
+CREATE TABLE IF NOT EXISTS billing_call_holds (
+  call_seq INTEGER PRIMARY KEY REFERENCES generation_calls(seq),
+  reserved_usd REAL,
+  exhausted INTEGER NOT NULL DEFAULT 0,
+  finished TEXT
+);
+CREATE TRIGGER IF NOT EXISTS close_billing_hold AFTER UPDATE OF state ON generation_calls
+WHEN OLD.state = 'running' AND NEW.state <> 'running' BEGIN
+  UPDATE billing_call_holds SET finished = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  WHERE call_seq = NEW.seq;
+END;

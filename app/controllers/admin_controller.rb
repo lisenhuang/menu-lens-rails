@@ -24,6 +24,7 @@ class AdminController < ApiController
     current=Settings.current
     render json:{settings:current,imageModels:Settings::IMAGES,readingModels:Settings::READERS,outputUsdPerMillion:30,
       readingModel:current["readingModel"],readingEfforts:Settings::READERS.dig(current["readingModel"],"efforts"),
+      estimatedBalanceUsd:BillingBalance.remaining_usd, minimumBalanceUsd:BillingBalance::MINIMUM_USD,
       balance:Store.first("SELECT cents,organization,checked FROM billing_snapshot WHERE id=1")}
   end
   def save = render(json:{settings:Settings.save(body(2048))})

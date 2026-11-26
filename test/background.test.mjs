@@ -67,6 +67,10 @@ test('private uploads and approved illustrations finish with no client connected
       assert.deepEqual(extra,{});
       assert.equal(check.store,false);
       addressRequests++;
+      if (addressReply==='exhausted') {
+        res.statusCode=429;
+        return res.end(JSON.stringify({error:{code:'credit_balance_exhausted'}}));
+      }
       if (addressReply==='offline') {res.statusCode=503;return res.end('{}');}
       const verdict=addressReply || {status:'match',options:[{label:name,address,sourceUrl}]};
       response={status:'completed',usage:{input_tokens:100,output_tokens:20},output:[
@@ -207,6 +211,10 @@ test('private uploads and approved illustrations finish with no client connected
   assert.equal((await login({pin,token:'admin-valid'})).status,403);
   const defaults=await (await request(settingsPath,admin)).json();
   assert.equal(defaults.balance,null);
+  const creditCheck=()=>request('/api/verify','',{name:'Credit test',address:'Example Street',date:'2025-01-01',
+    consent:true,shareOriginals:true,autoPublish:true,token:'test'},'192.0.2.201');
+  assert.equal((await creditCheck()).status,503);
+  assert.equal(addressRequests,0);
   assert.equal((await request('/api/admin/balance',admin,{organization:'Example',usd:'12.34'})).status,404);
   assert.equal((await (await request('/api/config')).json()).balance,undefined);
   assert.deepEqual(defaults.settings,{model:'gpt-image-2.6-sunburst',quality:'high',readingModel:'gpt-6.1-terra',reasoning:'medium'});
@@ -215,7 +223,7 @@ test('private uploads and approved illustrations finish with no client connected
   olderSettings.reasoning='low';
   const previousDatabase=new DatabaseSync(join(dir,'menu.sqlite'));
   previousDatabase.prepare('INSERT INTO generation_settings VALUES (1,?)').run(JSON.stringify(olderSettings));
-  const recorded={cents:1234,organization:'Example billing account',checked:'2026-11-21T01:00:00.000Z'};
+  const recorded={cents:12345,organization:'Example billing account',checked:'2026-11-21T01:00:00.000Z'};
   previousDatabase.prepare('INSERT INTO billing_snapshot VALUES (1,?,?,?)').run(recorded.cents,recorded.organization,recorded.checked);
   previousDatabase.close();
   assert.deepEqual((await (await request(settingsPath,admin)).json()).balance,recorded);
@@ -624,6 +632,58 @@ test('private uploads and approved illustrations finish with no client connected
     assert.deepEqual(gates.map(control=>control.calls),[1,1,1,1,1,1,1,1]);
     const published=await (await request('/api/menus/'+large.id)).json();
     assert.deepEqual(published.dishes.map(d=>d.name),largeNames);
+  });
+  await t.test('credit cutoff guards concurrent requests, queued images and retries',async t=>{
+    const db=new DatabaseSync(join(dir,'menu.sqlite'));
+    t.after(()=>db.close());
+    function record(cents) {
+      db.prepare('UPDATE billing_snapshot SET cents=?,checked=? WHERE id=1').run(cents,new Date().toISOString());
+    }
+    const before=addressRequests;
+    record(999);
+    assert.equal((await creditCheck()).status,503);
+    assert.equal(addressRequests,before);
+    record(1000);
+    const attempts=await Promise.all(Array.from({length:3},creditCheck));
+    assert.deepEqual(attempts.map(r=>r.status).sort(),[200,503,503]);
+    assert.equal(addressRequests,before+1);
+    const accepted=attempts.find(r=>r.ok);
+    const path='/api/jobs/'+(await accepted.json()).id;
+    const owner=accepted.headers.getSetCookie().find(c=>c.startsWith('ml_job=')).split(';')[0];
+    const post=(action,body)=>request(path+'/'+action,owner,body,'192.0.2.201');
+    const status=async()=>(await request(path,owner)).json();
+    const readsBefore=readCalls,imagesBefore=imageCalls;
+    assert.equal((await post('upload',{pages:[photo]})).status,503);
+    assert.equal(readCalls,readsBefore);
+
+    record(2000);
+    holdRead=true;
+    visionResult=menu;
+    assert.equal((await post('upload',{pages:[photo]})).status,202);
+    await until(()=>readCalls===readsBefore+1);
+    // This snapshot overlaps the read. Its eventual charge must still count.
+    record(1000);
+    assert.equal((await creditCheck()).status,503);
+    holdRead=false;
+    await until(async()=>(await status()).state==='error');
+    assert.equal(imageCalls,imagesBefore);
+    assert.equal((await post('retry',{})).status,503);
+    assert.equal(addressRequests,before+1);
+    assert.equal(db.prepare('SELECT attempts FROM menus WHERE id=?').get(path.split('/').at(-1)).attempts,0);
+
+    record(2000);
+    assert.equal((await post('retry',{})).status,202);
+    await until(async()=>(await status()).state==='complete');
+    assert.equal(imageCalls,imagesBefore+1);
+    assert.equal(readCalls,readsBefore+1);
+
+    addressReply='exhausted';
+    assert.equal((await creditCheck()).status,503);
+    addressReply=null;
+    assert.equal((await creditCheck()).status,503);
+    assert.equal(addressRequests,before+2);
+    record(2000);
+    assert.equal((await creditCheck()).status,200);
   });
   assert.equal((await request('/fonts/dm-sans-OFL.txt')).status,200);
   assert.equal((await request('/api/verify','',{name:'Consent test',consent:true,locationConfirmed:true})).status,403);

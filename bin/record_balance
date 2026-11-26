@@ -1,0 +1,24 @@
+#!/usr/bin/env ruby
+require_relative "../config/environment"
+require "bigdecimal"
+require "time"
+
+amount, organization, checked = ARGV
+abort "Usage: bin/record_balance USD 'billing organisation' ISO8601_TIME" unless ARGV.size == 3
+abort "Enter the balance in USD with up to two decimal places" unless amount.match?(/\A-?\d{1,12}(?:\.\d{1,2})?\z/)
+abort "Enter the billing organisation" if organization.strip.empty?
+begin
+  observed = Time.iso8601(checked)
+rescue ArgumentError
+  abort "Enter the time the balance was checked in ISO 8601 format"
+end
+abort "The balance check must be in the past" if observed > Time.now
+
+saved = Store.first(<<~SQL, (BigDecimal(amount) * 100).to_i, organization.strip, observed.utc.iso8601(3))
+  INSERT INTO billing_snapshot(id, cents, organization, checked) VALUES(1, ?, ?, ?)
+  ON CONFLICT(id) DO UPDATE SET cents=excluded.cents, organization=excluded.organization, checked=excluded.checked
+  WHERE julianday(excluded.checked) >= julianday(billing_snapshot.checked) OR julianday(billing_snapshot.checked) IS NULL
+  RETURNING id
+SQL
+abort "A newer balance check is already recorded" unless saved
+puts "Balance recorded."

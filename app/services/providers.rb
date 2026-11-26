@@ -1,6 +1,9 @@
 module Providers
   extend self
   PROMPTS = JSON.parse(Rails.root.join("config/prompts.json").read)
+  READ_OUTPUT_TOKENS = 24_000
+  ADDRESS_OUTPUT_TOKENS = 3_500
+  ADDRESS_SEARCH_LIMIT = 6
   STRING = {type: "string"}.freeze
   def fields(properties) = {type:"object", properties:properties, required:properties.keys, additionalProperties:false}
   def structured(name,schema) = {format:{type:"json_schema",name:name,strict:true,schema:schema}}
@@ -20,6 +23,7 @@ module Providers
     data=JSON.parse(reply.body)
     unless reply.is_a?(Net::HTTPSuccess)
       received.call(data["usage"],false) if data["usage"]
+      raise BillingBalance::Exhausted if reply.code == "429" && data.dig("error", "code") == "credit_balance_exhausted"
       raise Problem.new(502,"The AI service could not complete this request. Please try again.")
     end
     data
@@ -48,7 +52,7 @@ module Providers
   def address(restaurant,received)
     schema=fields(status:{type:"string",enum:%w[match mismatch ambiguous unverified]},options:{type:"array",items:fields(label:STRING,address:STRING,sourceUrl:STRING)})
     data=openai("responses",{model:"gpt-6.1-terra",reasoning:{effort:"medium"},store:false,tools:[{type:"web_search",external_web_access:true}],
-      tool_choice:"required",include:["web_search_call.action.sources"],max_tool_calls:6,max_output_tokens:3500,
+      tool_choice:"required",include:["web_search_call.action.sources"],max_tool_calls:ADDRESS_SEARCH_LIMIT,max_output_tokens:ADDRESS_OUTPUT_TOKENS,
       instructions:PROMPTS.fetch("address"),input:restaurant.slice("name","address").to_json,text:structured("restaurant_address",schema)},55,received)
     searches=Array(data["output"]).select { |v| v["type"]=="web_search_call" }
     received.call(data["usage"]&.merge("search_calls"=>searches.count { |v| v.dig("action","type")=="search" }))
@@ -72,7 +76,7 @@ module Providers
     content=[{type:"input_text",text:"Transcribe the photographed pages into the menu schema. Make no inferences about missing text."}]
     content.concat(pages.map { |url| {type:"input_image",image_url:url,detail:"high"} })
     data=openai("responses",{model:model,store:false,instructions:PROMPTS.fetch("read"),input:[{role:"user",content:content}],
-      text:structured("menu_transcription",schema),max_output_tokens:24000,reasoning:{effort:effort}},300,received)
+      text:structured("menu_transcription",schema),max_output_tokens:READ_OUTPUT_TOKENS,reasoning:{effort:effort}},300,received)
     received.call(data["usage"])
     output(data).first
   end
