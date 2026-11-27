@@ -40,10 +40,19 @@ test('private uploads and approved illustrations finish with no client connected
   let addressRequests=0;
   const sourceUrl='https://restaurant.example/locations';
   let googleResults=[], placesRequest;
+  let feedReport,feedReads=0;
   const provider=createServer(async (req,res)=>{
     const chunks=[];
     for await (const chunk of req) chunks.push(chunk);
     const bytes=Buffer.concat(chunks);
+    if (req.url==='/credit-feed') {
+      feedReads++;
+      assert.equal(req.method,'GET');
+      assert.equal(req.headers.authorization,undefined);
+      assert.equal(req.headers.cookie,undefined);
+      res.writeHead(feedReport ? 200 : 503,{'Content-Type':'application/json'});
+      return res.end(JSON.stringify(feedReport));
+    }
     if (req.url.startsWith('/__storage/')) {
       assert.equal(req.headers.authorization,'Bearer test-storage');
       if (req.method==='PUT') objects.set(req.url,bytes);
@@ -136,9 +145,9 @@ test('private uploads and approved illustrations finish with no client connected
     }
     assert.fail('Timed out waiting for the job');
   }
-  async function start() {
+  async function start(creditFeed='') {
     child=spawn('bundle',['exec','puma','-C','config/puma.rb'],{stdio:['ignore','ignore','pipe'],
-      env:{...process.env,RAILS_ENV:"test",MOCK_PROVIDER_ORIGIN:"http://127.0.0.1:"+providerPort,MENU_IMAGE_CONCURRENCY:'',MENU_READ_CONCURRENCY:'',R2_GATEWAY_URL:'http://localhost/__storage/',R2_GATEWAY_SECRET:'test-storage',OPENAI_IMAGE_MODEL:'',OPENAI_VISION_MODEL:'',HOST:'127.0.0.1',PORT:String(port),DATA_DIR:dir,PUBLIC_ORIGIN:origin,
+      env:{...process.env,RAILS_ENV:"test",CREDIT_BALANCE_FEED_URL:creditFeed,CREDIT_BALANCE_MAX_AGE_SECONDS:'86400',MOCK_PROVIDER_ORIGIN:"http://127.0.0.1:"+providerPort,MENU_IMAGE_CONCURRENCY:'',MENU_READ_CONCURRENCY:'',R2_GATEWAY_URL:'http://localhost/__storage/',R2_GATEWAY_SECRET:'test-storage',OPENAI_IMAGE_MODEL:'',OPENAI_VISION_MODEL:'',HOST:'127.0.0.1',PORT:String(port),DATA_DIR:dir,PUBLIC_ORIGIN:origin,
         OPENAI_API_KEY:'test',GOOGLE_PLACES_API_KEY:'test',TURNSTILE_SECRET:'test',TURNSTILE_SITE_KEY:'test',TURNSTILE_HOSTNAME:'localhost',TURNSTILE_TEST:'0',ADMIN_PIN_VERIFIER:verifier,TRUST_CLOUDFLARE:'1'},
     });
     child.stderr.on('data',bytes=>process.stderr.write(bytes));
@@ -781,6 +790,61 @@ test('private uploads and approved illustrations finish with no client connected
     assert.equal(readCalls,before+1);
     assert.equal((await status()).readAttempt,3);
     assert.equal((await request('/originals/'+job.id+'/0.jpg')).status,404);
+  });
+  await t.test('shared credit updates control the cutoff without resetting later local charges',async t=>{
+    const db=new DatabaseSync(join(dir,'menu.sqlite'));
+    t.after(()=>db.close());
+    const feed='https://balance.example.test/credit-feed';
+    const row=()=>db.prepare('SELECT cents,checked,fetched_at FROM billing_feed_snapshots').get();
+    const config=async()=> (await (await request('/api/config')).json());
+    async function poll(report){
+      feedReport=report;
+      const before=feedReads;
+      await stop();
+      await start(feed);
+      await until(()=>feedReads>before);
+    }
+    // A configured feed is authoritative even when a funded manual snapshot exists.
+    await poll(null);
+    assert.equal((await config()).submissionsPaused,true);
+    const stale=new Date(Date.now()-2*86400000).toISOString();
+    await poll({balance:50,timestamp:stale});
+    await until(()=>row()?.checked===stale);
+    assert.equal((await config()).submissionsPaused,true);
+
+    const observed=new Date().toISOString();
+    await poll({balance:10,timestamp:observed});
+    await until(()=>row()?.checked===observed);
+    assert.equal((await config()).submissionsPaused,false);
+    assert.equal((await creditCheck('192.0.2.219')).status,200);
+    assert.equal((await config()).submissionsPaused,true);
+    const previousFetch=row().fetched_at;
+    await poll({balance:10,timestamp:observed});
+    await until(()=>row().fetched_at>previousFetch);
+    assert.equal((await config()).submissionsPaused,true);
+
+    const newer=new Date().toISOString();
+    await poll({balance:25.01,timestamp:newer});
+    await until(()=>row()?.checked===newer);
+    assert.equal(row().cents,2501);
+    assert.equal((await config()).submissionsPaused,false);
+    // Out-of-order, contradictory and invalid readings cannot extend the grace period.
+    for (const report of [null,{balance:100,timestamp:observed},{balance:100,timestamp:newer},
+      {balance:'NaN',timestamp:newer},{balance:100,timestamp:new Date(Date.now()+86400000).toISOString()}]){
+      db.prepare('UPDATE billing_feed_snapshots SET fetched_at=0').run();
+      await poll(report);
+      assert.equal((await config()).submissionsPaused,true);
+      assert.equal(row().checked,newer);
+      assert.equal(row().cents,2501);
+    }
+    await poll({balance:9.99,timestamp:new Date().toISOString()});
+    await until(()=>row()?.cents===999);
+    const publicConfig=await config();
+    assert.equal(publicConfig.submissionsPaused,true);
+    assert.ok(!Object.keys(publicConfig).some(key=>/balance|credit|feed/i.test(key)));
+    const before=addressRequests;
+    assert.equal((await creditCheck('192.0.2.219')).status,503);
+    assert.equal(addressRequests,before);
   });
   assert.equal((await request('/fonts/dm-sans-OFL.txt')).status,200);
   assert.equal((await request('/api/verify','',{name:'Consent test',consent:true,locationConfirmed:true})).status,403);

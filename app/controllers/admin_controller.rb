@@ -26,6 +26,7 @@ class AdminController < ApiController
     render json:{settings:current,imageModels:Settings::IMAGES,readingModels:Settings::READERS,outputUsdPerMillion:30,
       readingModel:current["readingModel"],readingEfforts:Settings::READERS.dig(current["readingModel"],"efforts"),
       estimatedBalanceUsd: credit&.fetch("remaining"), minimumBalanceUsd: BillingBalance::MINIMUM_USD,
+      balanceFeedStatus: credit&.fetch("feed_status") || (CreditBalanceFeed.configured? ? "waiting" : "manual"),
       providerBillingBlocked: credit&.fetch("provider_blocked") == 1, balance: credit&.slice("cents","organization","checked")}
   end
   def save = render(json:{settings:Settings.save(body(2048))})

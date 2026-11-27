@@ -51,3 +51,7 @@ WHEN OLD.state = 'running' AND NEW.state <> 'running' BEGIN
   UPDATE billing_call_holds SET finished = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   WHERE call_seq = NEW.seq;
 END;
+
+CREATE TABLE IF NOT EXISTS billing_feed_snapshots (
+  source TEXT PRIMARY KEY, cents INTEGER NOT NULL, checked TEXT NOT NULL, fetched_at INTEGER NOT NULL
+);

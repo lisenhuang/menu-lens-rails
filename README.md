@@ -108,7 +108,7 @@ node --test
 | Task | Configuration |
 | --- | --- |
 | Enable generation | Set `OPENAI_API_KEY`, `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` and `TURNSTILE_HOSTNAME` in the private runtime environment before starting Puma. |
-| Protect the OpenAI balance | Record the organisation’s credit in USD using the command below. Paid requests pause below US$10 or when the balance is unknown. |
+| Protect the OpenAI balance | Configure the private balance feed below, or record credit manually. Paid requests pause below US$10 or when the balance is unknown. |
 | Connect storage | Deploy `storage/wrangler.jsonc` with its private R2 bucket. Set the same random secret as `STORAGE_SECRET` on the Worker and `R2_GATEWAY_SECRET` on the server. Set `R2_GATEWAY_URL` to the Worker route, including its trailing slash. |
 | Configure AI | In `/admin`, choose the menu-reading model and its thinking level, or change the dish image model and quality. Private history records each request and its estimated cost. The server reads `ADMIN_PIN_VERIFIER` from its private environment. |
 | Runtime defaults | `OPENAI_IMAGE_MODEL=gpt-image-2.6-sunburst` at high quality, `OPENAI_VISION_MODEL=gpt-6.1-terra` with medium reasoning. |
@@ -119,7 +119,11 @@ node --test
 
 ### OpenAI balance cutoff
 
-From the application environment, record the balance shown in OpenAI Billing for the organisation that owns the app’s API key. Supply the time you checked it, including its time zone. For example:
+Set `CREDIT_BALANCE_FEED_URL` in the private server environment. Once a minute Menu Lens reads an HTTPS JSON response such as `{"balance":25.50,"timestamp":"2026-11-26T05:00:00Z"}`. The amount is the shared balance in USD at that timestamp. Menu Lens subtracts its own subsequent usage until the next update. Repeated timestamps keep those charges in place.
+
+Paid requests pause after five minutes without a valid feed response, or when the reported balance is more than 24 hours old (adjustable with `CREDIT_BALANCE_MAX_AGE_SECONDS`). A fresh, eligible report restores access. The admin panel shows when the balance was reported.
+
+For installations without a feed, record the balance shown in OpenAI Billing for the organisation that owns the app’s API key. Supply the time you checked it, including its time zone. For example:
 
 ```sh
 bundle exec ruby bin/record_balance 25.50 "Menu Lens organisation" 2026-11-26T18:00:00+13:00

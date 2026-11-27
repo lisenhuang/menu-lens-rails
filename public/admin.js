@@ -130,18 +130,26 @@ export async function openAdmin({api,page,loadTurnstile,escape}) {
     showBalance(data);
     showHistory();
   }
-  function showBalance({balance:record,estimatedBalanceUsd,minimumBalanceUsd,providerBillingBlocked}) {
+  function showBalance({balance:record,estimatedBalanceUsd,minimumBalanceUsd,providerBillingBlocked,balanceFeedStatus}) {
     const usd=new Intl.NumberFormat('en-NZ',{style:'currency',currency:'USD',roundingMode:'floor'});
     document.querySelector('#credit-value').textContent=record ? usd.format(record.cents/100) : 'Awaiting first check';
     const checked=record && new Date(record.checked).toLocaleString('en-NZ',{dateStyle:'medium',timeStyle:'short',timeZone:'Pacific/Auckland'});
     const cutoff=document.querySelector('#credit-cutoff');
     if (providerBillingBlocked) {
       cutoff.textContent='AI requests paused by OpenAI billing. Check the credits and limits for this project, then record a fresh balance.';
+    } else if (balanceFeedStatus==='stale') {
+      cutoff.textContent='AI requests paused. Publish a fresh balance update to resume.';
+    } else if (['waiting','unreachable'].includes(balanceFeedStatus)) {
+      cutoff.textContent='AI requests paused while waiting for a valid balance feed response.';
     } else if (estimatedBalanceUsd == null) {
       cutoff.textContent='AI requests paused until the credit balance can be verified.';
     } else {
       const status=estimatedBalanceUsd<minimumBalanceUsd ? 'paused' : 'enabled';
       cutoff.textContent=`AI requests ${status}. Estimated available credit ${usd.format(estimatedBalanceUsd)}. Cutoff ${usd.format(minimumBalanceUsd)}.`;
+    }
+    if (balanceFeedStatus!=='manual') {
+      document.querySelector('#credit-checked').textContent=record ? `Balance feed · Reported ${checked} (NZ time)` : 'Waiting for the first balance update.';
+      return;
     }
     document.querySelector('#credit-checked').textContent=record ?
       `${record.organization} · Manually checked ${checked} (NZ time)` : 'Check your organization’s balance in OpenAI Billing.';
